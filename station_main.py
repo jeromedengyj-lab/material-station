@@ -150,6 +150,10 @@ def main() -> int:
             self.alias_only_check.setChecked(core.alias_only)
             self.alias_only_check.stateChanged.connect(self._on_alias_only_changed)
             options_row.addWidget(self.alias_only_check)
+            self.manual_mode_check = QCheckBox("手动别名模式（导入后不自动执行）")
+            self.manual_mode_check.setChecked(core.manual_mode)
+            self.manual_mode_check.stateChanged.connect(self._on_manual_mode_changed)
+            options_row.addWidget(self.manual_mode_check)
             options_row.addStretch(1)
             layout.addLayout(options_row)
 
@@ -210,6 +214,11 @@ def main() -> int:
                 self.download_only_check.setChecked(False)
                 self.download_only_check.blockSignals(False)
             self._append_log(f"只申请别名模式：{'开启' if enabled else '关闭'}（需已有剧目信息）")
+
+        def _on_manual_mode_changed(self, state: int) -> None:
+            enabled = state == 2  # Qt.Checked
+            core.set_manual_mode(enabled)
+            self._append_log(f"手动别名模式：{'开启' if enabled else '关闭'}（导入后不自动执行，等手动输入别名）")
 
         def _add_task(self) -> None:
             value = self.book_input.text().strip()

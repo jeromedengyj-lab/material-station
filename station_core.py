@@ -38,6 +38,7 @@ _BOOK_ID_PATTERN = r"^\d{16,20}$"
 
 # 任务状态
 STATUS_QUEUED = "queued"          # 排队等待
+STATUS_PENDING_MANUAL = "pending_manual"  # 等待手动输入别名（手动模式下导入的任务不自动执行）
 STATUS_DOWNLOADING = "downloading"  # 下载原剧+封面中
 STATUS_GENERATING = "generating"    # 生成候选别名中
 STATUS_APPLYING = "applying"        # 申请三端别名中
@@ -92,6 +93,7 @@ class StationTask:
     input_value: str = ""          # 用户输入原始值（BookID 或剧名）
     resolved_book_id: str = ""     # 剧名模式下载后回填的真实平台 BookID
     manual_alias: bool = False     # True=手动别名申请，跳过下载和生成直接进入三端申请
+    manual_alias_name: str = ""     # 手动指定的别名（从txt解析或UI输入）
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -133,6 +135,7 @@ class StationCore:
         self.alias_mode = "prefix"  # prefix=前缀+两字，suffix=两字+后缀
         self.download_only = False  # True=只下载不申请别名
         self.alias_only = False  # True=跳过下载直接申请别名（需已有剧目信息）
+        self.manual_mode = False  # True=手动别名模式：新任务不自动执行，等用户手动输入别名
         self._ensure_dirs()
         self._load_state()
 
@@ -223,6 +226,9 @@ class StationCore:
         saved_alias_only = data.get("alias_only") if isinstance(data, dict) else None
         if isinstance(saved_alias_only, bool):
             self.alias_only = saved_alias_only
+        saved_manual_mode = data.get("manual_mode") if isinstance(data, dict) else None
+        if isinstance(saved_manual_mode, bool):
+            self.manual_mode = saved_manual_mode
         for book_id in list(self._tasks):
             task = self._tasks[book_id]
             if task.status in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
@@ -242,6 +248,7 @@ class StationCore:
             "alias_mode": self.alias_mode,
             "download_only": self.download_only,
             "alias_only": self.alias_only,
+            "manual_mode": self.manual_mode,
             "tasks": {book_id: task.to_dict() for book_id, task in self._tasks.items()},
         }
         path = self._state_file()
@@ -269,6 +276,12 @@ class StationCore:
             task.title = existing.title
             task.resolved_book_id = existing.resolved_book_id or book_id
         self._tasks[book_id] = task
+        if self.manual_mode:
+            task.status = STATUS_PENDING_MANUAL
+            task.detail = "等待手动输入别名"
+            self._save_state()
+            self._emit(book_id, task.status, "已添加，等待手动别名")
+            return task
         if book_id not in self._queue:
             self._queue.append(book_id)
         self._save_state()
@@ -294,6 +307,12 @@ class StationCore:
             task.title = existing.title
             task.resolved_book_id = existing.resolved_book_id
         self._tasks[task_key] = task
+        if self.manual_mode:
+            task.status = STATUS_PENDING_MANUAL
+            task.detail = "等待手动输入别名"
+            self._save_state()
+            self._emit(task_key, task.status, "已添加，等待手动别名")
+            return task
         if task_key not in self._queue:
             self._queue.append(task_key)
         self._save_state()
@@ -302,6 +321,9 @@ class StationCore:
 
     def add_tasks_from_file(self, file_path: str | Path) -> dict:
         """从 txt 文件批量导入任务，每行一个 BookID 或剧名，自动识别类型。
+        支持每行附带别名（用分号/逗号/制表符分隔），格式：BookID;别名
+        - 有别名：手动申请（跳过AI生成，直接用此别名申请三端）
+        - 无别名：自动申请（AI生成候选别名）
         返回 {"added": [...], "skipped": [...], "failed": [...]}。"""
         path = Path(file_path)
         if not path.exists():
@@ -314,16 +336,26 @@ class StationCore:
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue  # 空行和注释行跳过
+                # 解析可选别名：用分号或制表符分隔（不支持逗号，因为剧名里可能包含逗号）
+                parts = re.split(r"[;\t]", line, maxsplit=1)
+                identifier = parts[0].strip()
+                alias_name = parts[1].strip() if len(parts) > 1 else ""
                 try:
-                    task = self.add_task(line)
+                    task = self.add_task(identifier)
+                    if alias_name:
+                        # 有别名：标记为手动别名模式
+                        task.manual_alias = True
+                        task.manual_alias_name = alias_name
+                        task.detail = f"手动别名：{alias_name}"
+                        self._save_state()
                     added.append(task.input_value or task.book_id)
                 except ValueError as error:
                     # 已存在的任务算跳过，其他错误算失败
                     msg = str(error)
                     if "已在任务列表中" in msg:
-                        skipped.append(line)
+                        skipped.append(identifier)
                     else:
-                        failed.append((line, msg))
+                        failed.append((identifier, msg))
         return {"added": added, "skipped": skipped, "failed": failed}
 
     def remove_task(self, book_id: str) -> None:
@@ -416,6 +448,92 @@ class StationCore:
         self._save_state()
         self._emit(task.book_id, task.status, task.detail)
         return task
+
+    def apply_manual_alias_to_tasks(self, task_keys: list[str], aliases_text: str) -> list[StationTask]:
+        """批量手动别名：对选中的多个任务按顺序分配别名，跳过AI生成直接申请三端。
+        task_keys: 选中的任务 book_id 列表
+        aliases_text: 一个或多个别名，用逗号/空格/换行分隔
+        分配规则：第一个别名给第一个任务，第二个给第二个，以此类推；
+                  别名数量少于任务数量时，最后一个别名应用到剩余所有任务。
+        """
+        import json as _json
+        # 1. 解析别名
+        raw_aliases = [a.strip() for a in re.split(r"[,，\s\n]+", str(aliases_text or "")) if a.strip()]
+        if not raw_aliases:
+            raise ValueError("请输入至少一个别名")
+        if not task_keys:
+            raise ValueError("请先选中任务")
+        # 2. 校验别名格式
+        from manju_editor.material_workflow import valid_alias_candidates
+        affix = self.alias_prefix or self.model_prefix
+        validated = valid_alias_candidates(raw_aliases, prefix=affix, mode=self.alias_mode)
+        if len(validated) != len(set(raw_aliases)):
+            invalid = [a for a in raw_aliases if a not in validated]
+            mode_label = "前缀+两字" if self.alias_mode == "prefix" else "两字+后缀"
+            raise ValueError(f"以下别名不符合格式（{mode_label}，固定字为「{affix}」）：{'、'.join(invalid)}")
+        # 3. 逐个任务分配别名
+        results = []
+        for idx, task_key in enumerate(task_keys):
+            task = self._tasks.get(task_key)
+            if not task:
+                continue
+            # 分配别名：索引超限时用最后一个
+            alias = validated[min(idx, len(validated) - 1)]
+            # 确保有剧目信息
+            info = self._locate_info(task, self.data_root / "选剧文件夹" / "原剧视频")
+            if not info:
+                task.status = STATUS_FAILED
+                task.error = f"未找到剧目信息，无法手动申请别名：{task.input_value}"
+                task.detail = task.error
+                task.updated_at = time.time()
+                self._save_state()
+                self._emit(task.book_id, task.status, task.detail)
+                results.append(task)
+                continue
+            title = str(info.get("title", task.title or ""))
+            book_id = str(info.get("book_id", task.resolved_book_id or task.book_id or ""))
+            task.info_file = str(info["info_file"])
+            task.title = title
+            task.task_dir = str(Path(info["info_file"]).parent.parent)
+            # 写入三端别名任务.json
+            info_dir = Path(info["info_file"]).parent
+            task_file = info_dir / "三端别名任务.json"
+            rows = [{"order": 1, "alias": alias, "status": "queued", "platforms": {}}]
+            now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            payload = {
+                "version": 2,
+                "task_id": f"station_{book_id}",
+                "batch_id": f"station_{book_id}",
+                "title": title,
+                "book_id": book_id,
+                "alias_prefix": affix,
+                "status": "queued",
+                "current_index": 0,
+                "candidate_rows": rows,
+                "candidates": [alias],
+                "history": [],
+                "platforms": {},
+                "approved_alias": "",
+                "created_at": now,
+                "updated_at": now,
+            }
+            task_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = task_file.with_suffix(task_file.suffix + ".tmp")
+            tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, task_file)
+            # 设置任务为手动别名模式，加入队列
+            task.manual_alias = True
+            task.task_file = str(task_file)
+            task.status = STATUS_QUEUED
+            task.error = ""
+            task.detail = f"手动别名已提交：{alias}"
+            task.updated_at = time.time()
+            if task.book_id not in self._queue:
+                self._queue.append(task.book_id)
+            self._save_state()
+            self._emit(task.book_id, task.status, task.detail)
+            results.append(task)
+        return results
         self._emit(book_id, task.status, task.detail)
 
     # ---------- 回调 ----------
@@ -446,6 +564,11 @@ class StationCore:
         self.alias_only = bool(enabled)
         if self.alias_only:
             self.download_only = False
+        self._save_state()
+
+    def set_manual_mode(self, enabled: bool) -> None:
+        """设置手动别名模式：True=新任务不自动执行，等用户手动输入别名后申请。"""
+        self.manual_mode = bool(enabled)
         self._save_state()
 
     def _emit(self, book_id: str, status: str, detail: str) -> None:
@@ -643,7 +766,8 @@ class StationCore:
         return None
 
     def _generate(self, task: StationTask) -> None:
-        """阶段二：用本地 Ollama 生成候选别名，写三端别名任务.json。"""
+        """阶段二：用本地 Ollama 生成候选别名，写三端别名任务.json。
+        如果 task.manual_alias 且有 manual_alias_name，跳过AI生成，直接用手动别名。"""
         task.status = STATUS_GENERATING
         task.detail = "正在生成本地候选别名"
         task.updated_at = time.time()
@@ -654,6 +778,50 @@ class StationCore:
         title = str(info.get("title", "") or "").strip() or task.title
         intro = str(info.get("description", "") or "").strip()
         book_id = str(info.get("book_id", "") or task.book_id).strip()
+
+        # 手动别名：跳过AI生成，直接用手动别名写入三端别名任务.json
+        if task.manual_alias and task.manual_alias_name:
+            alias = task.manual_alias_name.strip()
+            # 校验别名格式
+            from manju_editor.material_workflow import valid_alias_candidates
+            affix = self.alias_prefix or self.model_prefix
+            validated = valid_alias_candidates([alias], prefix=affix, mode=self.alias_mode)
+            if not validated:
+                mode_label = "前缀+两字" if self.alias_mode == "prefix" else "两字+后缀"
+                raise ValueError(f"手动别名「{alias}」不符合格式（{mode_label}，固定字为「{affix}」）")
+            alias = validated[0]
+            # 写入三端别名任务.json
+            import json as _json
+            info_dir = Path(task.info_file).parent
+            task_file = info_dir / "三端别名任务.json"
+            now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            payload = {
+                "version": 2,
+                "task_id": f"station_{book_id}",
+                "batch_id": f"station_{book_id}",
+                "title": title,
+                "book_id": book_id,
+                "alias_prefix": affix,
+                "status": "queued",
+                "current_index": 0,
+                "candidate_rows": [{"order": 1, "alias": alias, "status": "queued", "platforms": {}}],
+                "candidates": [alias],
+                "history": [],
+                "platforms": {},
+                "approved_alias": "",
+                "created_at": now,
+                "updated_at": now,
+            }
+            task_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = task_file.with_suffix(task_file.suffix + ".tmp")
+            tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, task_file)
+            task.task_file = str(task_file)
+            task.detail = f"手动别名已写入：{alias}"
+            task.updated_at = time.time()
+            self._save_state()
+            self._emit(task.book_id, task.status, task.detail)
+            return
 
         try:
             from manju_editor.material_workflow import generate_alias_candidates, write_alias_task
