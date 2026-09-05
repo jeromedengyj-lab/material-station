@@ -426,21 +426,27 @@ class StationCore:
             return
         try:
             if self.alias_only:
-                # 只申请别名模式：跳过下载，直接用已有剧目信息生成候选+申请别名
+                # 只申请别名模式：优先用已有剧目信息，没有则用 info-only 快速获取（不下载视频/封面）
                 info = self._locate_info(task, self.data_root / "选剧文件夹" / "原剧视频")
                 if not info:
-                    task.status = STATUS_FAILED
-                    task.error = "只申请别名模式需要先下载（剧目信息.json不存在），请取消该模式后完整运行一次"
-                    task.detail = task.error
-                    task.updated_at = time.time()
-                    self._save_state()
-                    self._emit(task.book_id, task.status, task.detail)
-                    return
+                    self._emit(task.book_id, STATUS_DOWNLOADING, "未找到剧目信息，正在快速获取（不下载视频/封面）")
+                    self._download(task, info_only=True)
+                    if task.status != STATUS_DOWNLOADING:
+                        return
+                    info = self._locate_info(task, self.data_root / "选剧文件夹" / "原剧视频")
+                    if not info:
+                        task.status = STATUS_FAILED
+                        task.error = "只申请别名模式：快速获取剧目信息失败，请取消该模式后完整运行一次"
+                        task.detail = task.error
+                        task.updated_at = time.time()
+                        self._save_state()
+                        self._emit(task.book_id, task.status, task.detail)
+                        return
                 task.status = STATUS_DOWNLOADING
                 task.info_file = str(info["info_file"])
                 task.title = str(info.get("title", task.title or ""))
                 task.task_dir = str(Path(info["info_file"]).parent.parent)
-                self._emit(task.book_id, task.status, f"跳过下载，使用已有剧目信息：{task.title}")
+                self._emit(task.book_id, task.status, f"使用剧目信息：{task.title}")
             else:
                 self._download(task)
                 if task.status != STATUS_DOWNLOADING:
@@ -464,10 +470,13 @@ class StationCore:
             task.updated_at = time.time()
             self._emit(task.book_id, task.status, task.detail)
 
-    def _download(self, task: StationTask) -> None:
-        """阶段一：按 BookID 或剧名下载原剧视频 + 封面，落剧目信息.json。"""
+    def _download(self, task: StationTask, info_only: bool = False) -> None:
+        """阶段一：按 BookID 或剧名下载原剧视频 + 封面，落剧目信息.json。
+        info_only=True 时只获取剧目信息（不下载视频/封面），用于只申请别名模式。"""
         task.status = STATUS_DOWNLOADING
-        if task.input_type == "title":
+        if info_only:
+            task.detail = f"正在获取剧目信息（不下载视频/封面）：{task.input_value}"
+        elif task.input_type == "title":
             task.detail = f"正在按剧名「{task.input_value}」搜索并下载原剧与封面"
         else:
             task.detail = "正在按 BookID 搜索并下载原剧与封面"
@@ -479,6 +488,7 @@ class StationCore:
         cover_dir = self.data_root / "封面-原图"
         adapter = self._adapter("task-platform-download.mjs")
         log_path = self._log_file(task, "download")
+        extra_args = ["--info-only"] if info_only else []
         if task.input_type == "title":
             cmd = [
                 self.node_command, "--experimental-websocket",
@@ -487,6 +497,7 @@ class StationCore:
                 "--content-type", "manju",
                 "--output-dir", str(download_dir),
                 "--cover-output-dir", str(cover_dir),
+                *extra_args,
             ]
         else:
             cmd = [
@@ -496,6 +507,7 @@ class StationCore:
                 "--content-type", "manju",
                 "--output-dir", str(download_dir),
                 "--cover-output-dir", str(cover_dir),
+                *extra_args,
             ]
         env = {
             **os.environ,

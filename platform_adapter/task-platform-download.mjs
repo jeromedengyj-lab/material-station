@@ -44,7 +44,7 @@ const PORT=BROWSER_ROLE==='alias'?9223:9222;
 const ROLE_LOCK_DIR=path.join(APP_ROOT,'runtime','platform_adapter');
 const ROLE_LOCK=path.join(ROLE_LOCK_DIR,`${BROWSER_ROLE}.lock`);
 const val=argValue;
-let title=String(taskManifest.title||val('--title')).trim(), loginOnly=argv.includes('--login-only'),inspectOnly=argv.includes('--inspect-current');
+let title=String(taskManifest.title||val('--title')).trim(), loginOnly=argv.includes('--login-only'),inspectOnly=argv.includes('--inspect-current'),infoOnly=argv.includes('--info-only');
 const requestedContentType=(val('--content-type').trim().toLowerCase()||'manju');
 if(requestedContentType!=='manju')throw new Error('原剧下载入口当前只允许 content-type=manju');
 const DOWNLOAD_TAB=16;
@@ -474,8 +474,8 @@ try{
  if(!downloadable.length)downloadable=list.filter(x=>x.video_download_url||x.video_url||x.download_url);
  if(!downloadable.length)die('平台没有开放任何可下载章节。',17);
  console.log(`平台章节共 ${list.length} 集，当前开放下载 ${downloadable.length} 集；使用平台批量下载接口一次提交。`);
- let generated=downloadable.filter(x=>x.video_download_url||x.video_url||x.download_url);
- if(generated.length!==downloadable.length){
+ let generated=infoOnly?[]:downloadable.filter(x=>x.video_download_url||x.video_url||x.download_url);
+ if(!infoOnly&&generated.length!==downloadable.length){
    const before=a.length,range=await requestBatchExport(c,1,downloadable.length);
    if(!range)die('无法在批量下载弹窗填写范围或提交任务。',15);
    console.log(`已提交平台批量下载：可下载列表第 ${range.start}–${range.end} 项。`);
@@ -491,9 +491,9 @@ try{
  await fsp.mkdir(dir,{recursive:true});
  const coverUrl=book.thumb_url||book.cover_url||book.book_cover||book.poster_url;
  const coverFile=path.join(COVER_OUTPUT,`${safe(title)}.jpg`);
- if(coverUrl&&!fs.existsSync(coverFile)){console.log(`下载封面：${coverFile}`);try{await download(String(coverUrl).replace(/^http:/,'https:'),coverFile)}catch(e){console.error(`封面下载失败：${e.message}`)}}
+ if(coverUrl&&!fs.existsSync(coverFile)&&!infoOnly){console.log(`下载封面：${coverFile}`);try{await download(String(coverUrl).replace(/^http:/,'https:'),coverFile)}catch(e){console.error(`封面下载失败：${e.message}`)}}
  const info={title,book_id:String(book.book_id),description:book.book_abstract||book.subabstract||'',captured_at:new Date().toISOString(),cover_available:!!coverUrl,cover_file:fs.existsSync(coverFile)?coverFile:null,chapters:[]};
- for(const x of list){const ordinal=info.chapters.length+1,name=String(x.chapter_name||`第${ordinal}集`),u=x.video_download_url||x.video_url||generatedById.get(String(x.item_id||'')),row={index:ordinal,download_order:ordinal,platform_index:x.index??x.chapter_index??null,item_id:x.item_id,chapter_name:name,url_available:!!u};info.chapters.push(row);if(!u){console.log(`跳过下载列表第 ${ordinal} 集：平台未开放下载地址`);continue}let ext='.mp4';try{ext=path.extname(new URL(u).pathname)||'.mp4'}catch{}const file=path.join(dir,`${String(ordinal).padStart(3,'0')}_${safe(name)}${ext}`);if(fs.existsSync(file)&&(await fsp.stat(file)).size){console.log(`已存在：${path.basename(file)}`);continue}console.log(`下载：${path.basename(file)}（逻辑第${ordinal}集，平台标签“${name}”）`);try{await download(u,file)}catch(e){row.error=e.message;console.error(`失败：${e.message}`)}}
+ for(const x of list){const ordinal=info.chapters.length+1,name=String(x.chapter_name||`第${ordinal}集`),u=x.video_download_url||x.video_url||generatedById.get(String(x.item_id||'')),row={index:ordinal,download_order:ordinal,platform_index:x.index??x.chapter_index??null,item_id:x.item_id,chapter_name:name,url_available:!!u};info.chapters.push(row);if(infoOnly)continue;if(!u){console.log(`跳过下载列表第 ${ordinal} 集：平台未开放下载地址`);continue}let ext='.mp4';try{ext=path.extname(new URL(u).pathname)||'.mp4'}catch{}const file=path.join(dir,`${String(ordinal).padStart(3,'0')}_${safe(name)}${ext}`);if(fs.existsSync(file)&&(await fsp.stat(file)).size){console.log(`已存在：${path.basename(file)}`);continue}console.log(`下载：${path.basename(file)}（逻辑第${ordinal}集，平台标签“${name}”）`);try{await download(u,file)}catch(e){row.error=e.message;console.error(`失败：${e.message}`)}}
  const infoDir=path.join(dir,'剧目信息');await fsp.mkdir(infoDir,{recursive:true});const infoFile=path.join(infoDir,'剧目信息.json');await fsp.writeFile(infoFile,JSON.stringify(info,null,2),'utf8');
  console.log(`\n保存位置：${dir}`);const n=info.chapters.filter(x=>x.error).length;if(n)die(`${n} 集失败；再次运行可续传。`,14);
  console.log(`原剧已保存到本地任务中心指定目录：${dir}`);
