@@ -19,5 +19,5 @@ if(!title||!batch||rows.length<1){
 }
 const toolDir=path.dirname(fileURLToPath(import.meta.url));
 const worker=path.join(toolDir,'task-platform-download.mjs');
-const run=(script,args)=>spawnSync(process.execPath,[script,...args],{stdio:'inherit',windowsHide:false}).status??1;
+const run=(script,args)=>spawnSync(process.execPath,[...process.execArgv,script,...args],{stdio:'inherit',windowsHide:false}).status??1;
 process.exit(run(worker,['--task-file',taskFile,'--triple-platform','--watch','--local-task-center']));

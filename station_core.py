@@ -374,7 +374,7 @@ class StationCore:
         log_path = self._log_file(task, "download")
         if task.input_type == "title":
             cmd = [
-                self.node_command,
+                self.node_command, "--experimental-websocket",
                 str(adapter),
                 "--title", task.input_value,
                 "--content-type", "manju",
@@ -383,7 +383,7 @@ class StationCore:
             ]
         else:
             cmd = [
-                self.node_command,
+                self.node_command, "--experimental-websocket",
                 str(adapter),
                 "--book-id", task.book_id,
                 "--content-type", "manju",
@@ -493,7 +493,7 @@ class StationCore:
 
         adapter = self._adapter("run-alias-task.mjs")
         log_path = self._log_file(task, "alias")
-        cmd = [self.node_command, str(adapter), str(task.task_file)]
+        cmd = [self.node_command, "--experimental-websocket", str(adapter), str(task.task_file)]
         env = {
             **os.environ,
             "MANJU_TOOL_ROOT": str(self.tool_root),
