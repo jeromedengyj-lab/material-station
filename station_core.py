@@ -127,6 +127,7 @@ class StationCore:
         self._log: list[str] = []
         self._on_progress = None  # 回调(book_id, status, detail)
         self._lock = threading.Lock()
+        self.alias_prefix = ""  # 用户手动指定的别名前缀（前两字），空则用默认
         self._ensure_dirs()
         self._load_state()
 
@@ -205,6 +206,9 @@ class StationCore:
         queue = data.get("queue") if isinstance(data, dict) else None
         if isinstance(queue, list):
             self._queue = [str(x) for x in queue if str(x) in self._tasks]
+        saved_prefix = data.get("alias_prefix") if isinstance(data, dict) else None
+        if isinstance(saved_prefix, str):
+            self.alias_prefix = saved_prefix.strip()
         for book_id in list(self._tasks):
             task = self._tasks[book_id]
             if task.status in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
@@ -220,6 +224,7 @@ class StationCore:
             "version": 1,
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "queue": self._queue,
+            "alias_prefix": self.alias_prefix,
             "tasks": {book_id: task.to_dict() for book_id, task in self._tasks.items()},
         }
         path = self._state_file()
@@ -302,6 +307,11 @@ class StationCore:
     # ---------- 回调 ----------
     def set_progress_callback(self, callback) -> None:
         self._on_progress = callback
+
+    def set_alias_prefix(self, prefix: str) -> None:
+        """设置用户手动指定的别名前缀（前两字），空字符串则用默认前缀。"""
+        self.alias_prefix = str(prefix or "").strip()
+        self._save_state()
 
     def _emit(self, book_id: str, status: str, detail: str) -> None:
         if self._on_progress:
@@ -475,7 +485,7 @@ class StationCore:
             raise RuntimeError(f"独立软件缺少候选生成模块：{error}") from error
 
         candidates = generate_alias_candidates(
-            title, intro, count=3, prefix=self.model_prefix,
+            title, intro, count=3, prefix=self.alias_prefix or self.model_prefix,
             excluded={str(task.approved_alias or "").strip()} if task.approved_alias else None,
         )
         project = SimpleNamespace(

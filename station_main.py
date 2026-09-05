@@ -120,6 +120,16 @@ def main() -> int:
             top.addWidget(open_dir_btn)
             layout.addLayout(top)
 
+            prefix_row = QHBoxLayout()
+            prefix_row.addWidget(QLabel("别名前缀（前两字）："))
+            self.prefix_input = QLineEdit()
+            self.prefix_input.setPlaceholderText("留空自动生成，例如：知夏、雾兽、知夏雾兽")
+            self.prefix_input.setText(core.alias_prefix)
+            self.prefix_input.editingFinished.connect(self._on_prefix_changed)
+            prefix_row.addWidget(self.prefix_input, 1)
+            prefix_row.addWidget(QLabel("（生成的别名会此前缀开头，留空用默认策略）"))
+            layout.addLayout(prefix_row)
+
             self.table = QTableWidget(0, 5)
             self.table.setHorizontalHeaderLabels(["输入", "剧名", "状态", "详情", "时间"])
             header = self.table.horizontalHeader()
@@ -138,6 +148,11 @@ def main() -> int:
             self.setCentralWidget(root)
 
         # ---------- UI 动作 ----------
+        def _on_prefix_changed(self) -> None:
+            value = self.prefix_input.text().strip()
+            core.set_alias_prefix(value)
+            self._append_log(f"别名前缀已设置：{value or '（留空，自动生成）'}")
+
         def _add_task(self) -> None:
             value = self.book_input.text().strip()
             if not value:
