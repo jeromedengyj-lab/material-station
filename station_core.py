@@ -496,7 +496,7 @@ class StationCore:
             workflow_batch_id=f"station_{book_id}",
         )
         series_root = self.data_root / "选剧文件夹" / "原剧视频"
-        task_file = write_alias_task(project, candidates, preferred_series_root=series_root, prefix=self.model_prefix)
+        task_file = write_alias_task(project, candidates, preferred_series_root=series_root, prefix=self.alias_prefix or self.model_prefix)
         task.task_file = str(task_file)
         task.detail = f"已生成候选别名：{'、'.join(candidates)}"
         task.updated_at = time.time()
