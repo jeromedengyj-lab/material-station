@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,6 +91,7 @@ class StationTask:
     input_type: str = "book_id"   # "book_id" 或 "title"
     input_value: str = ""          # 用户输入原始值（BookID 或剧名）
     resolved_book_id: str = ""     # 剧名模式下载后回填的真实平台 BookID
+    manual_alias: bool = False     # True=手动别名申请，跳过下载和生成直接进入三端申请
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -343,6 +345,77 @@ class StationCore:
         if book_id not in self._queue:
             self._queue.append(book_id)
         self._save_state()
+
+    def apply_manual_alias(self, identifier: str, aliases_text: str) -> StationTask:
+        """手动提供别名，直接去三个平台申请（跳过 AI 生成候选）。
+        identifier: BookID 或剧名，自动识别。
+        aliases_text: 一个或多个别名，用逗号/空格/换行分隔。
+        要求：剧目信息.json 已存在（需先下载过）。
+        """
+        import json as _json
+        # 1. 解析别名
+        raw_aliases = [a.strip() for a in re.split(r"[,，\s\n]+", str(aliases_text or "")) if a.strip()]
+        if not raw_aliases:
+            raise ValueError("请输入至少一个别名")
+        # 2. 校验别名格式（4个中文字，符合当前前缀/后缀模式）
+        from manju_editor.material_workflow import valid_alias_candidates
+        affix = self.alias_prefix or self.model_prefix
+        validated = valid_alias_candidates(raw_aliases, prefix=affix, mode=self.alias_mode)
+        if len(validated) != len(set(raw_aliases)):
+            invalid = [a for a in raw_aliases if a not in validated]
+            mode_label = "前缀+两字" if self.alias_mode == "prefix" else "两字+后缀"
+            raise ValueError(f"以下别名不符合格式（{mode_label}，固定字为「{affix}」）：{'、'.join(invalid)}")
+        # 3. 确保任务存在
+        task = self.add_task(identifier)
+        # 4. 确保有剧目信息
+        info = self._locate_info(task, self.data_root / "选剧文件夹" / "原剧视频")
+        if not info:
+            raise ValueError(f"未找到剧目信息，请先下载（或勾选「只申请别名」自动获取）：{task.input_value}")
+        title = str(info.get("title", task.title or ""))
+        book_id = str(info.get("book_id", task.resolved_book_id or task.book_id or ""))
+        task_dir = str(Path(info["info_file"]).parent.parent)
+        task.info_file = str(info["info_file"])
+        task.title = title
+        task.task_dir = task_dir
+        # 5. 写入三端别名任务.json
+        info_dir = Path(info["info_file"]).parent
+        task_file = info_dir / "三端别名任务.json"
+        rows = [{"order": i + 1, "alias": alias, "status": "queued", "platforms": {}}
+                for i, alias in enumerate(validated)]
+        now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        payload = {
+            "version": 2,
+            "task_id": f"station_{book_id}",
+            "batch_id": f"station_{book_id}",
+            "title": title,
+            "book_id": book_id,
+            "alias_prefix": affix,
+            "status": "queued",
+            "current_index": 0,
+            "candidate_rows": rows,
+            "candidates": validated,
+            "history": [],
+            "platforms": {},
+            "approved_alias": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = task_file.with_suffix(task_file.suffix + ".tmp")
+        tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, task_file)
+        # 6. 设置任务为手动别名模式，加入队列
+        task.manual_alias = True
+        task.task_file = str(task_file)
+        task.status = STATUS_QUEUED
+        task.error = ""
+        task.detail = f"手动别名已提交：{'、'.join(validated)}"
+        task.updated_at = time.time()
+        if task.book_id not in self._queue:
+            self._queue.append(task.book_id)
+        self._save_state()
+        self._emit(task.book_id, task.status, task.detail)
+        return task
         self._emit(book_id, task.status, task.detail)
 
     # ---------- 回调 ----------
@@ -423,6 +496,10 @@ class StationCore:
             task.error = "本地 Ollama 无法启动，请检查绿色文件夹是否完整"
             task.detail = task.error
             self._emit(task.book_id, task.status, task.detail)
+            return
+        # 手动别名申请：跳过下载和生成，直接进入三端申请
+        if task.manual_alias and task.task_file:
+            self._apply(task)
             return
         try:
             if self.alias_only:

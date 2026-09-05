@@ -153,6 +153,17 @@ def main() -> int:
             options_row.addStretch(1)
             layout.addLayout(options_row)
 
+            manual_row = QHBoxLayout()
+            manual_row.addWidget(QLabel("手动别名："))
+            self.manual_alias_input = QLineEdit()
+            self.manual_alias_input.setPlaceholderText("输入别名，多个用逗号分隔，如：年年炉灶,年年红砖")
+            manual_row.addWidget(self.manual_alias_input, 1)
+            manual_apply_btn = QPushButton("申请手动别名")
+            manual_apply_btn.clicked.connect(self._apply_manual_alias)
+            manual_row.addWidget(manual_apply_btn)
+            manual_row.addWidget(QLabel("（需先有剧目信息，跳过AI生成直接申请三端）"))
+            layout.addLayout(manual_row)
+
             self.table = QTableWidget(0, 5)
             self.table.setHorizontalHeaderLabels(["输入", "剧名", "状态", "详情", "时间"])
             header = self.table.horizontalHeader()
@@ -238,6 +249,25 @@ def main() -> int:
                 self, "批量导入结果",
                 f"成功：{len(added)} 条\n跳过（已存在）：{len(skipped)} 条\n失败：{len(failed)} 条"
             )
+
+        def _apply_manual_alias(self) -> None:
+            identifier = self.book_input.text().strip()
+            aliases = self.manual_alias_input.text().strip()
+            if not identifier:
+                QMessageBox.warning(self, "无法申请", "请先在上方输入 BookID 或剧名")
+                return
+            if not aliases:
+                QMessageBox.warning(self, "无法申请", "请输入手动别名")
+                return
+            try:
+                task = core.apply_manual_alias(identifier, aliases)
+                self.manual_alias_input.clear()
+                self._append_log(f"手动别名已提交：{task.detail}")
+                self._refresh_tasks()
+            except ValueError as error:
+                QMessageBox.warning(self, "无法申请", str(error))
+            except Exception as error:  # noqa: BLE001
+                QMessageBox.critical(self, "申请失败", str(error))
 
         def _selected_task_keys(self) -> list[str]:
             rows = {index.row() for index in self.table.selectionModel().selectedRows()}
