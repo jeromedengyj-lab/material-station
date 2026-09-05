@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -125,6 +126,7 @@ class StationCore:
         self._close_requested = False
         self._log: list[str] = []
         self._on_progress = None  # 回调(book_id, status, detail)
+        self._lock = threading.Lock()
         self._ensure_dirs()
         self._load_state()
 
@@ -310,29 +312,37 @@ class StationCore:
 
     # ---------- 调度 ----------
     def tick(self) -> None:
-        """调度入口：每次调用最多启动一个任务，保证严格串行。"""
+        """调度入口：每次调用最多启动一个任务，在后台线程执行，不阻塞 UI。"""
         if self._running is not None:
             return
         if self._close_requested:
             return
-        while self._queue:
-            book_id = self._queue[0]
-            task = self._tasks.get(book_id)
-            if task is None:
-                self._queue.pop(0)
-                continue
-            if task.status == STATUS_DONE:
-                self._queue.pop(0)
-                continue
-            self._running = task
-            self._emit(book_id, task.status, "任务开始")
-            try:
-                self._run_task(task)
-            finally:
+        with self._lock:
+            while self._queue:
+                book_id = self._queue[0]
+                task = self._tasks.get(book_id)
+                if task is None:
+                    self._queue.pop(0)
+                    continue
+                if task.status == STATUS_DONE:
+                    self._queue.pop(0)
+                    continue
+                self._running = task
+                self._emit(book_id, task.status, "任务开始")
+                thread = threading.Thread(target=self._run_task_async, args=(task,), daemon=True)
+                thread.start()
+                return
+
+    def _run_task_async(self, task: StationTask) -> None:
+        """后台线程执行任务，结束后清理运行状态。"""
+        try:
+            self._run_task(task)
+        finally:
+            with self._lock:
                 self._running = None
-            self._queue.pop(0)
-            self._save_state()
-            return
+                if task.book_id in self._queue:
+                    self._queue.remove(task.book_id)
+                self._save_state()
 
     # ---------- 三阶段执行 ----------
     def _run_task(self, task: StationTask) -> None:
@@ -567,9 +577,12 @@ class StationCore:
 
     @staticmethod
     def _run_process(cmd: list[str], env: dict, log_path: Path) -> tuple[int, str]:
+        # 找到 mjs 脚本路径作为 cwd（cmd 可能含 --experimental-websocket 等 flag）
+        mjs_path = next((arg for arg in cmd if arg.endswith(".mjs")), cmd[1] if len(cmd) > 1 else ".")
+        cwd = str(Path(mjs_path).parent)
         with log_path.open("a", encoding="utf-8") as handle:
             process = subprocess.Popen(
-                cmd, cwd=str(Path(cmd[1]).parent), env=env,
+                cmd, cwd=cwd, env=env,
                 stdout=handle, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )

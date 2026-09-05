@@ -176,8 +176,9 @@ def main() -> int:
 
         # ---------- 更新 ----------
         def _on_progress(self, book_id: str, status: str, detail: str) -> None:
-            self._append_log(f"[{book_id}] {self._STATUS_TEXT.get(status, status)}：{detail}")
-            self._refresh_tasks()
+            # 回调在后台线程执行，UI 操作需 marshal 到主线程
+            text = f"[{book_id}] {self._STATUS_TEXT.get(status, status)}：{detail}"
+            QTimer.singleShot(0, lambda: (self._append_log(text), self._refresh_tasks()))
 
         def _refresh_tasks(self) -> None:
             tasks = core.tasks
