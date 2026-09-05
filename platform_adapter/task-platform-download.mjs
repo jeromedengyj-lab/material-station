@@ -224,7 +224,7 @@ async function submitAlias(c,alias,bookId){
  let state;
  for(let i=0;i<32;i++){
    if(await verificationChallenge(c))return {ok:false,blocked:true,reason:'检测到任务台滑块/安全验证，需要人工完成后从当前候选恢复'};
-   try{state=await ev(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),duplicate=/你已申请此别名|已有相同书名存在|别名已存在|该别名已被使用/.test(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,duplicate}})()`)}catch{await sleep(250);continue}
+   try{state=await ev(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),duplicate=/你已申请此别名|已有相同书名存在|别名已存在|该别名已被使用|该别名已被他人申请|已被他人申请|他人已申请|此别名已被/.test(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,duplicate}})()`)}catch{await sleep(250);continue}
    if(state.duplicate)return {ok:false,reason:state};
    if(state.success||state.messages.some(x=>/别名创建成功|已提交|审核中/.test(x))){try{await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||'').includes('别名创建成功')}),b=d?.querySelector('svg[class*=close],[class*=close]');if(!b)return false;b.click();return true})()`)}catch{}await sleep(150);return {ok:true,state}}
    await sleep(250);
@@ -361,7 +361,7 @@ async function runTripleWorkflow(c){
          state.platforms[alias][p.name]={state:'verification_required',reason:submitted.reason,detected_at:new Date().toISOString()};
          state.status='waiting_manual_verification';state.current_index=state.current_index;await recordAliasLedger(ledger,alias,'verification_required',bookId,{candidate_index:state.current_index,platform:p.name});await perf('verification_required',{book_id:bookId,alias,platform:p.name});await save();await lock.close();release();die('检测到任务台滑块/安全验证。已保留当前候选和进度，请人工完成验证后重新运行同一任务。',29);
        }
-        if(!submitted.ok){const explicitDuplicate=!!submitted?.reason?.duplicate;state.platforms[alias][p.name]={state:explicitDuplicate?'duplicate':'submit_failed',reason:submitted.reason||submitted.state};if(explicitDuplicate)failed=true;else transientFailure={platform:p.name,reason:submitted.reason||submitted.state};break}
+        if(!submitted.ok){const explicitDuplicate=!!submitted?.reason?.duplicate;state.platforms[alias][p.name]={state:explicitDuplicate?'duplicate':'submit_failed',reason:submitted.reason||submitted.state};failed=true;break}
         state.platforms[alias][p.name]={state:submitted.pending_visibility?'pending_visibility':(submitted.existing?'existing':'submitted'),submitted_at:new Date().toISOString(),platform_book_id:String(opened.platform_book_id||bookId),fallback_title_match:!!opened.fallback_title_match};await save();
      }else state.platforms[alias][p.name]=status;
    }
