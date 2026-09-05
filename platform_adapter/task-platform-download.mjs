@@ -82,7 +82,7 @@ async function appendJsonLine(file,payload){await fsp.mkdir(path.dirname(file),{
 async function perf(stage,data={}){try{await appendJsonLine(ALIAS_PERF_LOG,{time:new Date().toISOString(),device:os.hostname(),batch_id:batchId,title,stage,...data})}catch{}}
 async function loadAliasLedger(){const latest=new Map;try{for(const line of (await fsp.readFile(ALIAS_LEDGER,'utf8')).split(/\r?\n/)){if(!line.trim())continue;try{const row=JSON.parse(line);if(row?.alias)latest.set(row.alias,row)}catch{}}}catch{}return latest}
 async function recordAliasLedger(ledger,alias,status,bookId,extra={}){const row={time:new Date().toISOString(),alias,status,book_id:String(bookId),title,batch_id:batchId,device:os.hostname(),...extra};await appendJsonLine(ALIAS_LEDGER,row);ledger.set(alias,row);return row}
-if(!loginOnly&&!inspectOnly&&!title)die('没有输入剧名。',2);
+if(!loginOnly&&!inspectOnly&&!title&&!directBookId)die('没有输入剧名。',2);
 if(expectedEpisodesRaw&&(!Number.isInteger(expectedEpisodes)||expectedEpisodes<1))die('全集数量必须是正整数。',2);
 if(expectedBookId&&!/^\d{16,20}$/.test(expectedBookId))die('expected-book-id 必须是完整数字BookID。',2);
 await fsp.mkdir(PROFILE,{recursive:true}); await fsp.mkdir(OUTPUT,{recursive:true}); await fsp.mkdir(COVER_OUTPUT,{recursive:true});
