@@ -44,6 +44,7 @@ def main() -> int:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QTableWidget, QTableWidgetItem, QPushButton, QLineEdit, QLabel,
         QPlainTextEdit, QHeaderView, QMessageBox, QComboBox, QCheckBox,
+        QFileDialog,
     )
     from PySide6.QtCore import Qt, QTimer
 
@@ -109,6 +110,9 @@ def main() -> int:
             add_btn = QPushButton("添加任务")
             add_btn.clicked.connect(self._add_task)
             top.addWidget(add_btn)
+            import_btn = QPushButton("批量导入txt")
+            import_btn.clicked.connect(self._import_from_file)
+            top.addWidget(import_btn)
             retry_btn = QPushButton("重试选中")
             retry_btn.clicked.connect(self._retry_selected)
             top.addWidget(retry_btn)
@@ -208,6 +212,32 @@ def main() -> int:
                 self._refresh_tasks()
             except ValueError as error:
                 QMessageBox.warning(self, "无法添加", str(error))
+
+        def _import_from_file(self) -> None:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "选择批量导入的 txt 文件", "", "文本文件 (*.txt);;所有文件 (*.*)"
+            )
+            if not file_path:
+                return
+            try:
+                result = core.add_tasks_from_file(file_path)
+            except Exception as error:  # noqa: BLE001
+                QMessageBox.critical(self, "导入失败", str(error))
+                return
+            added = result["added"]
+            skipped = result["skipped"]
+            failed = result["failed"]
+            self._append_log(f"批量导入完成：成功 {len(added)} 条，跳过 {len(skipped)} 条，失败 {len(failed)} 条")
+            if added:
+                self._append_log(f"  已添加：{'、'.join(added[:10])}{'...' if len(added) > 10 else ''}")
+            if failed:
+                for line, msg in failed[:5]:
+                    self._append_log(f"  失败：{line} → {msg}")
+            self._refresh_tasks()
+            QMessageBox.information(
+                self, "批量导入结果",
+                f"成功：{len(added)} 条\n跳过（已存在）：{len(skipped)} 条\n失败：{len(failed)} 条"
+            )
 
         def _selected_task_keys(self) -> list[str]:
             rows = {index.row() for index in self.table.selectionModel().selectedRows()}

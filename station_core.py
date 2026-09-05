@@ -298,6 +298,32 @@ class StationCore:
         self._emit(task_key, task.status, "已加入队列")
         return task
 
+    def add_tasks_from_file(self, file_path: str | Path) -> dict:
+        """从 txt 文件批量导入任务，每行一个 BookID 或剧名，自动识别类型。
+        返回 {"added": [...], "skipped": [...], "failed": [...]}。"""
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"文件不存在：{path}")
+        added: list[str] = []
+        skipped: list[str] = []
+        failed: list[tuple[str, str]] = []
+        with open(path, "r", encoding="utf-8-sig") as f:
+            for line_no, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue  # 空行和注释行跳过
+                try:
+                    task = self.add_task(line)
+                    added.append(task.input_value or task.book_id)
+                except ValueError as error:
+                    # 已存在的任务算跳过，其他错误算失败
+                    msg = str(error)
+                    if "已在任务列表中" in msg:
+                        skipped.append(line)
+                    else:
+                        failed.append((line, msg))
+        return {"added": added, "skipped": skipped, "failed": failed}
+
     def remove_task(self, book_id: str) -> None:
         if book_id in self._queue:
             self._queue.remove(book_id)
