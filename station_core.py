@@ -54,9 +54,27 @@ def _is_book_id(value: str) -> bool:
     return bool(re.fullmatch(_BOOK_ID_PATTERN, str(value or "").strip()))
 
 
+def _normalize_title(value: str) -> str:
+    """剧名归一化：NFKC + 去全部空白，与 mjs 端 normalizeTitle 对齐。"""
+    import unicodedata
+    return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+
+
+def _safe_filename(value: str) -> str:
+    """替换 Windows 文件名非法字符，用于日志文件名。"""
+    import re
+    return re.sub(r'[\\/:*?"<>|]', "_", str(value or ""))
+
+
 @dataclass
 class StationTask:
-    """一个 BookID 的完整任务：下载 → 候选 → 三端别名。"""
+    """一个任务的完整流程：下载 → 候选 → 三端别名。
+
+    book_id 字段兼作任务字典 key：
+      - BookID 模式（input_type="book_id"）：book_id = 真实平台 BookID
+      - 剧名模式（input_type="title"）：book_id = "title:<剧名>" 临时 key，
+        下载完成后真实 BookID 回填到 resolved_book_id
+    """
 
     book_id: str
     status: str = STATUS_QUEUED
@@ -68,6 +86,9 @@ class StationTask:
     info_file: str = ""      # 剧目信息/剧目信息.json
     task_file: str = ""      # 剧目信息/三端别名任务.json
     approved_alias: str = ""
+    input_type: str = "book_id"   # "book_id" 或 "title"
+    input_value: str = ""          # 用户输入原始值（BookID 或剧名）
+    resolved_book_id: str = ""     # 剧名模式下载后回填的真实平台 BookID
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -161,7 +182,7 @@ class StationCore:
     def _log_file(self, task: StationTask, stage: str) -> Path:
         log_dir = self.data_root / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir / f"{task.book_id}_{stage}.log"
+        return log_dir / f"{_safe_filename(task.book_id)}_{stage}.log"
 
     # ---------- 状态持久化 ----------
     def _load_state(self) -> None:
@@ -218,15 +239,41 @@ class StationCore:
         existing = self._tasks.get(book_id)
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"BookID {book_id} 已在任务列表中")
-        task = StationTask(book_id=book_id)
+        task = StationTask(book_id=book_id, input_type="book_id", input_value=book_id)
         if existing:
             # 重新入队：清空旧进度，保留标题便于展示
             task.title = existing.title
+            task.resolved_book_id = existing.resolved_book_id or book_id
         self._tasks[book_id] = task
         if book_id not in self._queue:
             self._queue.append(book_id)
         self._save_state()
         self._emit(book_id, task.status, "已加入队列")
+        return task
+
+    def add_task(self, identifier: str) -> StationTask:
+        """统一入口：自动判断输入是 BookID（16~20位纯数字）还是剧名。"""
+        identifier = str(identifier or "").strip()
+        if not identifier:
+            raise ValueError("请输入 BookID 或剧名")
+        if _is_book_id(identifier):
+            return self.add_book_id(identifier)
+        # 剧名模式
+        if len(identifier) > 100:
+            raise ValueError("剧名过长（最多 100 字）")
+        task_key = f"title:{identifier}"
+        existing = self._tasks.get(task_key)
+        if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
+            raise ValueError(f"剧名「{identifier}」已在任务列表中")
+        task = StationTask(book_id=task_key, input_type="title", input_value=identifier)
+        if existing:
+            task.title = existing.title
+            task.resolved_book_id = existing.resolved_book_id
+        self._tasks[task_key] = task
+        if task_key not in self._queue:
+            self._queue.append(task_key)
+        self._save_state()
+        self._emit(task_key, task.status, "已加入队列")
         return task
 
     def remove_task(self, book_id: str) -> None:
@@ -311,9 +358,12 @@ class StationCore:
             self._emit(task.book_id, task.status, task.detail)
 
     def _download(self, task: StationTask) -> None:
-        """阶段一：按 BookID 下载原剧视频 + 封面，落剧目信息.json。"""
+        """阶段一：按 BookID 或剧名下载原剧视频 + 封面，落剧目信息.json。"""
         task.status = STATUS_DOWNLOADING
-        task.detail = "正在按 BookID 搜索并下载原剧与封面"
+        if task.input_type == "title":
+            task.detail = f"正在按剧名「{task.input_value}」搜索并下载原剧与封面"
+        else:
+            task.detail = "正在按 BookID 搜索并下载原剧与封面"
         task.updated_at = time.time()
         self._save_state()
         self._emit(task.book_id, task.status, task.detail)
@@ -322,14 +372,24 @@ class StationCore:
         cover_dir = self.data_root / "封面-原图"
         adapter = self._adapter("task-platform-download.mjs")
         log_path = self._log_file(task, "download")
-        cmd = [
-            self.node_command,
-            str(adapter),
-            "--book-id", task.book_id,
-            "--content-type", "manju",
-            "--output-dir", str(download_dir),
-            "--cover-output-dir", str(cover_dir),
-        ]
+        if task.input_type == "title":
+            cmd = [
+                self.node_command,
+                str(adapter),
+                "--title", task.input_value,
+                "--content-type", "manju",
+                "--output-dir", str(download_dir),
+                "--cover-output-dir", str(cover_dir),
+            ]
+        else:
+            cmd = [
+                self.node_command,
+                str(adapter),
+                "--book-id", task.book_id,
+                "--content-type", "manju",
+                "--output-dir", str(download_dir),
+                "--cover-output-dir", str(cover_dir),
+            ]
         env = {
             **os.environ,
             "MANJU_TOOL_ROOT": str(self.tool_root),
@@ -347,6 +407,8 @@ class StationCore:
             return
 
         task.title = str(info.get("title", "") or "").strip()
+        if task.input_type == "title":
+            task.resolved_book_id = str(info.get("book_id", "") or "").strip()
         task.info_file = str(info["info_file"])
         task.task_dir = str(Path(info["info_file"]).parent.parent)
         task.cover_file = str(info.get("cover_file", "") or "")
@@ -356,10 +418,14 @@ class StationCore:
         self._emit(task.book_id, task.status, task.detail)
 
     def _locate_info(self, task: StationTask, download_dir: Path) -> dict | None:
-        """扫描下载目录，定位 BookID 匹配的剧目信息.json。"""
+        """扫描下载目录，定位任务匹配的剧目信息.json。
+
+        BookID 模式按 info.book_id 精确匹配；剧名模式按剧名归一化后匹配。
+        """
         download_dir = Path(download_dir)
         if not download_dir.is_dir():
             return None
+        target_title_norm = _normalize_title(task.input_value) if task.input_type == "title" else ""
         for folder in sorted(download_dir.iterdir(), key=lambda p: p.stat().st_mtime if p.is_dir() else 0, reverse=True):
             if not folder.is_dir():
                 continue
@@ -370,9 +436,14 @@ class StationCore:
                 info = json.loads(info_file.read_text(encoding="utf-8-sig"))
             except (OSError, ValueError):
                 continue
-            if str(info.get("book_id", "")) == task.book_id:
-                info["info_file"] = str(info_file)
-                return info
+            if task.input_type == "title":
+                if _normalize_title(info.get("title", "")) == target_title_norm:
+                    info["info_file"] = str(info_file)
+                    return info
+            else:
+                if str(info.get("book_id", "")) == task.book_id:
+                    info["info_file"] = str(info_file)
+                    return info
         return None
 
     def _generate(self, task: StationTask) -> None:

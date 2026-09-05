@@ -101,13 +101,13 @@ def main() -> int:
             layout.setContentsMargins(10, 10, 10, 10)
 
             top = QHBoxLayout()
-            top.addWidget(QLabel("BookID（16~20位数字）："))
+            top.addWidget(QLabel("BookID / 剧名："))
             self.book_input = QLineEdit()
-            self.book_input.setPlaceholderText("输入平台 BookID 后回车或点添加")
-            self.book_input.returnPressed.connect(self._add_book)
+            self.book_input.setPlaceholderText("输入 BookID（16~20位数字）或剧名，回车添加")
+            self.book_input.returnPressed.connect(self._add_task)
             top.addWidget(self.book_input, 1)
             add_btn = QPushButton("添加任务")
-            add_btn.clicked.connect(self._add_book)
+            add_btn.clicked.connect(self._add_task)
             top.addWidget(add_btn)
             retry_btn = QPushButton("重试选中")
             retry_btn.clicked.connect(self._retry_selected)
@@ -121,7 +121,7 @@ def main() -> int:
             layout.addLayout(top)
 
             self.table = QTableWidget(0, 5)
-            self.table.setHorizontalHeaderLabels(["BookID", "剧名", "状态", "详情", "时间"])
+            self.table.setHorizontalHeaderLabels(["输入", "剧名", "状态", "详情", "时间"])
             header = self.table.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
             header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -138,36 +138,33 @@ def main() -> int:
             self.setCentralWidget(root)
 
         # ---------- UI 动作 ----------
-        def _add_book(self) -> None:
+        def _add_task(self) -> None:
             value = self.book_input.text().strip()
             if not value:
                 return
             try:
-                task = core.add_book_id(value)
+                task = core.add_task(value)
                 self.book_input.clear()
-                self._append_log(f"已添加 BookID {task.book_id}")
+                label = f"BookID {task.input_value}" if task.input_type == "book_id" else f"剧名「{task.input_value}」"
+                self._append_log(f"已添加 {label}")
                 self._refresh_tasks()
             except ValueError as error:
                 QMessageBox.warning(self, "无法添加", str(error))
 
-        def _selected_book_ids(self) -> list[str]:
+        def _selected_task_keys(self) -> list[str]:
             rows = {index.row() for index in self.table.selectionModel().selectedRows()}
-            result = []
-            for row in sorted(rows):
-                item = self.table.item(row, 0)
-                if item and item.text():
-                    result.append(item.text())
-            return result
+            tasks = core.tasks
+            return [tasks[row].book_id for row in sorted(rows) if 0 <= row < len(tasks)]
 
         def _retry_selected(self) -> None:
-            for book_id in self._selected_book_ids():
-                core.retry_task(book_id)
+            for task_key in self._selected_task_keys():
+                core.retry_task(task_key)
             self._refresh_tasks()
 
         def _remove_selected(self) -> None:
-            for book_id in self._selected_book_ids():
+            for task_key in self._selected_task_keys():
                 try:
-                    core.remove_task(book_id)
+                    core.remove_task(task_key)
                 except Exception as error:  # noqa: BLE001
                     QMessageBox.warning(self, "无法移除", str(error))
             self._refresh_tasks()
@@ -186,7 +183,8 @@ def main() -> int:
             tasks = core.tasks
             self.table.setRowCount(len(tasks))
             for row, task in enumerate(tasks):
-                self.table.setItem(row, 0, QTableWidgetItem(task.book_id))
+                display_input = task.input_value or task.book_id
+                self.table.setItem(row, 0, QTableWidgetItem(display_input))
                 self.table.setItem(row, 1, QTableWidgetItem(task.title or "-"))
                 self.table.setItem(row, 2, QTableWidgetItem(self._STATUS_TEXT.get(task.status, task.status)))
                 self.table.setItem(row, 3, QTableWidgetItem(task.detail or ""))
