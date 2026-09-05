@@ -128,6 +128,9 @@ class StationCore:
         self._on_progress = None  # 回调(book_id, status, detail)
         self._lock = threading.Lock()
         self.alias_prefix = ""  # 用户手动指定的别名前缀（前两字），空则用默认
+        self.alias_mode = "prefix"  # prefix=前缀+两字，suffix=两字+后缀
+        self.download_only = False  # True=只下载不申请别名
+        self.alias_only = False  # True=跳过下载直接申请别名（需已有剧目信息）
         self._ensure_dirs()
         self._load_state()
 
@@ -209,6 +212,15 @@ class StationCore:
         saved_prefix = data.get("alias_prefix") if isinstance(data, dict) else None
         if isinstance(saved_prefix, str):
             self.alias_prefix = saved_prefix.strip()
+        saved_mode = data.get("alias_mode") if isinstance(data, dict) else None
+        if isinstance(saved_mode, str) and saved_mode in ("prefix", "suffix"):
+            self.alias_mode = saved_mode
+        saved_download_only = data.get("download_only") if isinstance(data, dict) else None
+        if isinstance(saved_download_only, bool):
+            self.download_only = saved_download_only
+        saved_alias_only = data.get("alias_only") if isinstance(data, dict) else None
+        if isinstance(saved_alias_only, bool):
+            self.alias_only = saved_alias_only
         for book_id in list(self._tasks):
             task = self._tasks[book_id]
             if task.status in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
@@ -225,6 +237,9 @@ class StationCore:
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "queue": self._queue,
             "alias_prefix": self.alias_prefix,
+            "alias_mode": self.alias_mode,
+            "download_only": self.download_only,
+            "alias_only": self.alias_only,
             "tasks": {book_id: task.to_dict() for book_id, task in self._tasks.items()},
         }
         path = self._state_file()
@@ -313,6 +328,27 @@ class StationCore:
         self.alias_prefix = str(prefix or "").strip()
         self._save_state()
 
+    def set_alias_mode(self, mode: str) -> None:
+        """设置别名格式：prefix=前缀+两字（默认），suffix=两字+后缀。"""
+        if mode not in ("prefix", "suffix"):
+            raise ValueError(f"别名模式必须是 prefix 或 suffix， got: {mode}")
+        self.alias_mode = mode
+        self._save_state()
+
+    def set_download_only(self, enabled: bool) -> None:
+        """设置只下载模式：True=只下载原剧+封面，不生成候选/申请别名。"""
+        self.download_only = bool(enabled)
+        if self.download_only:
+            self.alias_only = False
+        self._save_state()
+
+    def set_alias_only(self, enabled: bool) -> None:
+        """设置只申请别名模式：True=跳过下载，直接生成候选+申请别名（需已有剧目信息）。"""
+        self.alias_only = bool(enabled)
+        if self.alias_only:
+            self.download_only = False
+        self._save_state()
+
     def _emit(self, book_id: str, status: str, detail: str) -> None:
         if self._on_progress:
             try:
@@ -363,8 +399,33 @@ class StationCore:
             self._emit(task.book_id, task.status, task.detail)
             return
         try:
-            self._download(task)
-            if task.status != STATUS_DOWNLOADING:
+            if self.alias_only:
+                # 只申请别名模式：跳过下载，直接用已有剧目信息生成候选+申请别名
+                info = self._locate_info(task, self.data_root / "选剧文件夹" / "原剧视频")
+                if not info:
+                    task.status = STATUS_FAILED
+                    task.error = "只申请别名模式需要先下载（剧目信息.json不存在），请取消该模式后完整运行一次"
+                    task.detail = task.error
+                    task.updated_at = time.time()
+                    self._save_state()
+                    self._emit(task.book_id, task.status, task.detail)
+                    return
+                task.status = STATUS_DOWNLOADING
+                task.info_file = str(info["info_file"])
+                task.title = str(info.get("title", task.title or ""))
+                task.task_dir = str(Path(info["info_file"]).parent.parent)
+                self._emit(task.book_id, task.status, f"跳过下载，使用已有剧目信息：{task.title}")
+            else:
+                self._download(task)
+                if task.status != STATUS_DOWNLOADING:
+                    return
+            if self.download_only:
+                # 只下载模式：下载完成即结束，不生成候选/申请别名
+                task.status = STATUS_DONE
+                task.detail = "下载完成（仅下载模式）"
+                task.updated_at = time.time()
+                self._save_state()
+                self._emit(task.book_id, task.status, task.detail)
                 return
             self._generate(task)
             if task.status != STATUS_GENERATING:
@@ -486,6 +547,7 @@ class StationCore:
 
         candidates = generate_alias_candidates(
             title, intro, count=3, prefix=self.alias_prefix or self.model_prefix,
+            mode=self.alias_mode,
             excluded={str(task.approved_alias or "").strip()} if task.approved_alias else None,
         )
         project = SimpleNamespace(
@@ -496,7 +558,7 @@ class StationCore:
             workflow_batch_id=f"station_{book_id}",
         )
         series_root = self.data_root / "选剧文件夹" / "原剧视频"
-        task_file = write_alias_task(project, candidates, preferred_series_root=series_root, prefix=self.alias_prefix or self.model_prefix)
+        task_file = write_alias_task(project, candidates, preferred_series_root=series_root, prefix=self.alias_prefix or self.model_prefix, mode=self.alias_mode)
         task.task_file = str(task_file)
         task.detail = f"已生成候选别名：{'、'.join(candidates)}"
         task.updated_at = time.time()

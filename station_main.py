@@ -43,7 +43,7 @@ def main() -> int:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QTableWidget, QTableWidgetItem, QPushButton, QLineEdit, QLabel,
-        QPlainTextEdit, QHeaderView, QMessageBox,
+        QPlainTextEdit, QHeaderView, QMessageBox, QComboBox, QCheckBox,
     )
     from PySide6.QtCore import Qt, QTimer
 
@@ -130,6 +130,25 @@ def main() -> int:
             prefix_row.addWidget(QLabel("（生成的别名会此前缀开头，留空用默认策略）"))
             layout.addLayout(prefix_row)
 
+            options_row = QHBoxLayout()
+            options_row.addWidget(QLabel("别名格式："))
+            self.mode_combo = QComboBox()
+            self.mode_combo.addItems(["前缀+两字（如 知夏藏锋）", "两字+后缀（如 藏锋知夏）"])
+            self.mode_combo.setCurrentIndex(0 if core.alias_mode == "prefix" else 1)
+            self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+            options_row.addWidget(self.mode_combo)
+            options_row.addSpacing(20)
+            self.download_only_check = QCheckBox("只下载（不申请别名）")
+            self.download_only_check.setChecked(core.download_only)
+            self.download_only_check.stateChanged.connect(self._on_download_only_changed)
+            options_row.addWidget(self.download_only_check)
+            self.alias_only_check = QCheckBox("只申请别名（跳过下载）")
+            self.alias_only_check.setChecked(core.alias_only)
+            self.alias_only_check.stateChanged.connect(self._on_alias_only_changed)
+            options_row.addWidget(self.alias_only_check)
+            options_row.addStretch(1)
+            layout.addLayout(options_row)
+
             self.table = QTableWidget(0, 5)
             self.table.setHorizontalHeaderLabels(["输入", "剧名", "状态", "详情", "时间"])
             header = self.table.horizontalHeader()
@@ -152,6 +171,30 @@ def main() -> int:
             value = self.prefix_input.text().strip()
             core.set_alias_prefix(value)
             self._append_log(f"别名前缀已设置：{value or '（留空，自动生成）'}")
+
+        def _on_mode_changed(self, index: int) -> None:
+            mode = "prefix" if index == 0 else "suffix"
+            core.set_alias_mode(mode)
+            label = "前缀+两字" if mode == "prefix" else "两字+后缀"
+            self._append_log(f"别名格式已切换：{label}")
+
+        def _on_download_only_changed(self, state: int) -> None:
+            enabled = state == 2  # Qt.Checked
+            core.set_download_only(enabled)
+            if enabled:
+                self.alias_only_check.blockSignals(True)
+                self.alias_only_check.setChecked(False)
+                self.alias_only_check.blockSignals(False)
+            self._append_log(f"只下载模式：{'开启' if enabled else '关闭'}")
+
+        def _on_alias_only_changed(self, state: int) -> None:
+            enabled = state == 2  # Qt.Checked
+            core.set_alias_only(enabled)
+            if enabled:
+                self.download_only_check.blockSignals(True)
+                self.download_only_check.setChecked(False)
+                self.download_only_check.blockSignals(False)
+            self._append_log(f"只申请别名模式：{'开启' if enabled else '关闭'}（需已有剧目信息）")
 
         def _add_task(self) -> None:
             value = self.book_input.text().strip()
