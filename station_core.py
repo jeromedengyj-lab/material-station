@@ -431,6 +431,7 @@ class StationCore:
             "title": title,
             "book_id": book_id,
             "alias_prefix": affix,
+            "alias_mode": self.alias_mode,
             "status": "queued",
             "current_index": 0,
             "candidate_rows": rows,
@@ -515,6 +516,7 @@ class StationCore:
                 "title": title,
                 "book_id": book_id,
                 "alias_prefix": affix,
+                "alias_mode": self.alias_mode,
                 "status": "queued",
                 "current_index": 0,
                 "candidate_rows": rows,
@@ -812,6 +814,7 @@ class StationCore:
                 "title": title,
                 "book_id": book_id,
                 "alias_prefix": affix,
+                "alias_mode": self.alias_mode,
                 "status": "queued",
                 "current_index": 0,
                 "candidate_rows": [{"order": 1, "alias": alias, "status": "queued", "platforms": {}}],
@@ -827,7 +830,7 @@ class StationCore:
             tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, task_file)
             task.task_file = str(task_file)
-            task.detail = f"手动别名已写入：{alias}（固定字自动识别为「{affix}」）"
+            task.detail = f"手动别名已写入：{alias}（固定字自动识别为「{affix}」，{self.alias_mode}模式）"
             task.updated_at = time.time()
             self._save_state()
             self._emit(task.book_id, task.status, task.detail)
