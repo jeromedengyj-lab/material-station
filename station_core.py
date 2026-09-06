@@ -1,4 +1,4 @@
-"""素材准备站核心调度器。
+﻿"""素材准备站核心调度器。
 
 三功能（下载原剧视频 / 下载封面 / 申请三端关键词别名）从漫剧自动任务中心剥离后，
 在本独立软件中以「BookID 手动输入」为任务来源串行执行：
@@ -342,12 +342,12 @@ class StationCore:
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue  # 空行和注释行跳过
-                # 解析可选别名：用英文分号/中文分号/制表符分隔（不支持逗号，因为剧名里可能包含逗号）
-                parts = re.split(r"[;；\t]", line, maxsplit=1)
+                # 解析可选别名：首选竖线|（原剧名几乎不会用），兼容英文分号;、中文分号；、制表符
+                parts = re.split(r"[|;；\t]", line, maxsplit=1)
                 identifier = parts[0].strip()
                 alias_part = parts[1].strip() if len(parts) > 1 else ""
-                # 多个别名用中文逗号/英文逗号分隔，作为候选依次尝试
-                alias_names = [a.strip() for a in re.split(r"[,，]", alias_part) if a.strip()] if alias_part else []
+                # 多个别名首选竖线|分隔，兼容中文逗号，、英文逗号,
+                alias_names = [a.strip() for a in re.split(r"[|,，]", alias_part) if a.strip()] if alias_part else []
                 try:
                     task = self.add_task(identifier)
                     if alias_names:
@@ -395,7 +395,7 @@ class StationCore:
         """
         import json as _json
         # 1. 解析别名
-        raw_aliases = [a.strip() for a in re.split(r"[,，\s\n]+", str(aliases_text or "")) if a.strip()]
+        raw_aliases = [a.strip() for a in re.split(r"[|,，\s\n]+", str(aliases_text or "")) if a.strip()]
         if not raw_aliases:
             raise ValueError("请输入至少一个别名")
         # 2. 校验别名格式（手动别名不被前缀后缀限制，只要求恰好4个中文字）
@@ -472,7 +472,7 @@ class StationCore:
         """
         import json as _json
         # 1. 解析别名
-        raw_aliases = [a.strip() for a in re.split(r"[,，\s\n]+", str(aliases_text or "")) if a.strip()]
+        raw_aliases = [a.strip() for a in re.split(r"[|,，\s\n]+", str(aliases_text or "")) if a.strip()]
         if not raw_aliases:
             raise ValueError("请输入至少一个别名")
         if not task_keys:
