@@ -1,11 +1,11 @@
-﻿# 素材准备站 - 绿色文件夹构建脚本
-# 用法：powershell -ExecutionPolicy Bypass -File src\material_station\build_station.ps1
+﻿# 素材准备站 - 绿色文件夹构建脚本（独立仓库版）
+# 用法：powershell -ExecutionPolicy Bypass -File build_station.ps1
 # 产物：build_station_portable\素材准备站\（整个文件夹拷到目标设备即用）
 $ErrorActionPreference = "Stop"
 
-$root = "C:\Users\adm\Documents\ChatGPT\漫剧剪辑本地"
+$root = "D:\漫剧剪辑工具\material-station"
 $venvPython = "D:\漫剧剪辑工具\app\.venv\Scripts\python.exe"
-$spec = "$root\src\material_station\build_station.spec"
+$spec = "$root\build_station.spec"
 $work = "$root\build_station_work"
 $dist = "$root\build_station_dist"
 $portable = "$root\build_station_portable"
@@ -80,6 +80,10 @@ Windows 设备即可使用，无需安装任何运行时。
    - data\选剧文件夹\原剧视频\{剧名}\     原剧视频（001_第1集.mp4 ...）
    - data\封面-原图\{剧名}.jpg            封面
    - data\选剧文件夹\原剧视频\{剧名}\剧目信息\三端别名任务.json   三端审核结果
+
+【一键下载到表格】
+- 点「下载到表格」按钮，选择保存位置，当前任务列表导出为 CSV（Excel 可直接打开）
+- 只读导出，不会清除或修改界面任务信息
 
 【注意事项】
 - 程序串行执行任务：同一时刻只处理一个 BookID，其余排队等待

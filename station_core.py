@@ -164,6 +164,10 @@ class StationCore:
                     return str(candidate)
             except Exception:
                 pass
+        # 打包后 node 位于 _MEIPASS/runtime/node/node.exe（onedir 即 _internal/runtime/node）
+        bundle = Path(getattr(sys, "_MEIPASS", ""))
+        if bundle.is_dir() and (bundle / "runtime" / "node" / "node.exe").is_file():
+            return str(bundle / "runtime" / "node" / "node.exe")
         for candidate in (
             Path(r"D:\漫剧剪辑工具\runtime\node\node.exe"),
             Path(r"D:\漫剧剪辑工具\release\漫剧自动任务中心_v52\_internal\runtime\node\node.exe"),
