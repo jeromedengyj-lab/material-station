@@ -64,7 +64,7 @@ const aliasPattern=aliasMode==='suffix'
     : new RegExp(`^${_escapedPrefix}[\\u4e00-\\u9fff]{2}$`);
 const tripleMode=argv.includes('--triple-platform'),watchMode=argv.includes('--watch');
 function safe(s){return String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/g,'').slice(0,120)||'未命名'}
-const normalizeTitle=s=>String(s||'').normalize('NFKC').replace(/\s+/g,'').trim();
+const normalizeTitle=s=>String(s||'').normalize('NFKC').replace(/[\s,，.。!！?？:：;；、《》「」『』（）()【】\[\]~～\-—_]/g,'').trim();
 function die(s,n=1){console.error(`\n错误：${s}`);process.exit(n)}
 const sleep=n=>new Promise(r=>setTimeout(r,n));
 function processAlive(pid){if(!Number.isInteger(pid)||pid<1)return false;try{process.kill(pid,0);return true}catch{return false}}
