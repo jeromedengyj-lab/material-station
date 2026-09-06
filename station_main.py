@@ -35,7 +35,7 @@ def _adapter_dir(tool_root: Path) -> Path:
     candidate = tool_root / "platform_adapter"
     if (candidate / "task-platform-download.mjs").is_file():
         return candidate
-    # 开发环境：material_station/platform_adapter
+    # 开发环境：仓库根/platform_adapter
     return Path(__file__).resolve().parent / "platform_adapter"
 
 
@@ -48,17 +48,11 @@ def main() -> int:
     )
     from PySide6.QtCore import Qt, QTimer
 
-    # 打包（PyInstaller pathex=src）用包路径；开发直接跑脚本时回退同目录导入
-    try:
-        from material_station.station_core import (
-            StationCore, STATUS_QUEUED, STATUS_DOWNLOADING, STATUS_GENERATING,
-            STATUS_APPLYING, STATUS_WAITING_MANUAL, STATUS_DONE, STATUS_FAILED,
-        )
-    except ImportError:
-        from station_core import (
-            StationCore, STATUS_QUEUED, STATUS_DOWNLOADING, STATUS_GENERATING,
-            STATUS_APPLYING, STATUS_WAITING_MANUAL, STATUS_DONE, STATUS_FAILED,
-        )
+    # 独立仓库：station_core.py 与 station_main.py 同目录（开发/打包一致）
+    from station_core import (
+        StationCore, STATUS_QUEUED, STATUS_DOWNLOADING, STATUS_GENERATING,
+        STATUS_APPLYING, STATUS_WAITING_MANUAL, STATUS_DONE, STATUS_FAILED,
+    )
 
     tool_root = _tool_root()
     core = StationCore(

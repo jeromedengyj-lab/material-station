@@ -156,10 +156,7 @@ class StationCore:
 
     @staticmethod
     def _find_node() -> str:
-        try:
-            from manju_editor.runtime import bundled_node
-        except Exception:
-            bundled_node = None
+        bundled_node = None  # 独立版本：不依赖主程序 runtime，直接走下方路径查找
         if bundled_node is not None:
             try:
                 candidate = bundled_node()
@@ -894,7 +891,7 @@ class StationCore:
             return
 
         try:
-            from manju_editor.material_workflow import generate_alias_candidates, write_alias_task
+            from station_alias import generate_alias_candidates, write_alias_task
         except ImportError as error:
             raise RuntimeError(f"独立软件缺少候选生成模块：{error}") from error
 
@@ -904,6 +901,7 @@ class StationCore:
             title, intro, count=3, prefix=affix,
             mode=self.alias_mode,
             excluded={str(task.approved_alias or "").strip()} if task.approved_alias else None,
+            shared_root=self.data_root,
         )
         project = SimpleNamespace(
             title=title,
@@ -970,11 +968,7 @@ class StationCore:
             return True
         except Exception:
             pass
-        try:
-            from manju_editor.runtime import bundled_ollama
-            executable = bundled_ollama()
-        except Exception:
-            executable = Path(self.tool_root) / "runtime" / "ollama" / "ollama.exe"
+        executable = Path(self.tool_root) / "runtime" / "ollama" / "ollama.exe"
         if not Path(executable).is_file():
             system = shutil.which("ollama")
             executable = Path(system) if system else executable

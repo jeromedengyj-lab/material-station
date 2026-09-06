@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build_station_work/
+build_station_dist/
+
+# 运行数据
+data/
+*.log
+
+# 系统
+Thumbs.db
+.DS_Store

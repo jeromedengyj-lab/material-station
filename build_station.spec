@@ -17,8 +17,7 @@ from pathlib import Path
 
 _block_cipher = None
 
-_station_root = Path(SPECPATH)                        # src/material_station
-_repo_src = _station_root.parent                      # 仓库根/src（manju_editor 所在）
+_station_root = Path(SPECPATH)                        # 仓库根（material_station 文件平铺在此）
 _node_dir = Path(r"D:\漫剧剪辑工具\release\漫剧自动任务中心_v52\_internal\runtime\node")
 _adapter_dir = _station_root / "platform_adapter"
 
@@ -29,19 +28,13 @@ _datas = [
 
 a = Analysis(
     [str(_station_root / "station_main.py")],
-    pathex=[str(_repo_src)],
+    pathex=[str(_station_root)],
     binaries=[],
     datas=_datas,
     hiddenimports=[
-        "material_station.station_core",
-        "material_station.station_main",
-        "manju_editor.material_workflow",
-        "manju_editor.alias_lookup",
-        "manju_editor.cover_workflow",
-        "manju_editor.runtime",
-        "manju_editor.hook_text",
-        "manju_editor.auto_tasks",
-        "manju_editor.media_probe",
+        "station_core",
+        "station_main",
+        "station_alias",
     ],
     hookspath=[],
     hooksconfig={},
