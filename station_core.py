@@ -133,6 +133,7 @@ class StationCore:
         self._lock = threading.Lock()
         self.alias_prefix = ""  # 用户手动指定的别名前缀（前两字），空则用默认
         self.alias_mode = "prefix"  # prefix=前缀+两字，suffix=两字+后缀
+        self.fix_affix = False  # True=必须指定固定字（alias_prefix生效），False=AI自由生成4个字
         self.download_only = False  # True=只下载不申请别名
         self.alias_only = False  # True=跳过下载直接申请别名（需已有剧目信息）
         self.manual_mode = False  # True=手动别名模式：新任务不自动执行，等用户手动输入别名
@@ -220,6 +221,9 @@ class StationCore:
         saved_mode = data.get("alias_mode") if isinstance(data, dict) else None
         if isinstance(saved_mode, str) and saved_mode in ("prefix", "suffix"):
             self.alias_mode = saved_mode
+        saved_fix_affix = data.get("fix_affix") if isinstance(data, dict) else None
+        if isinstance(saved_fix_affix, bool):
+            self.fix_affix = saved_fix_affix
         saved_download_only = data.get("download_only") if isinstance(data, dict) else None
         if isinstance(saved_download_only, bool):
             self.download_only = saved_download_only
@@ -246,6 +250,7 @@ class StationCore:
             "queue": self._queue,
             "alias_prefix": self.alias_prefix,
             "alias_mode": self.alias_mode,
+            "fix_affix": self.fix_affix,
             "download_only": self.download_only,
             "alias_only": self.alias_only,
             "manual_mode": self.manual_mode,
@@ -389,14 +394,18 @@ class StationCore:
         raw_aliases = [a.strip() for a in re.split(r"[,，\s\n]+", str(aliases_text or "")) if a.strip()]
         if not raw_aliases:
             raise ValueError("请输入至少一个别名")
-        # 2. 校验别名格式（4个中文字，符合当前前缀/后缀模式）
-        from manju_editor.material_workflow import valid_alias_candidates
-        affix = self.alias_prefix or self.model_prefix
-        validated = valid_alias_candidates(raw_aliases, prefix=affix, mode=self.alias_mode)
-        if len(validated) != len(set(raw_aliases)):
-            invalid = [a for a in raw_aliases if a not in validated]
-            mode_label = "前缀+两字" if self.alias_mode == "prefix" else "两字+后缀"
-            raise ValueError(f"以下别名不符合格式（{mode_label}，固定字为「{affix}」）：{'、'.join(invalid)}")
+        # 2. 校验别名格式（手动别名不被前缀后缀限制，只要求恰好4个中文字）
+        invalid = [a for a in raw_aliases if not re.fullmatch(r"[\u4e00-\u9fff]{4}", a)]
+        if invalid:
+            raise ValueError(f"以下别名必须恰好是4个中文汉字：{'、'.join(invalid)}")
+        # 从第一个别名提取固定字（前缀模式取前两字，后缀模式取后两字）
+        affix = raw_aliases[0][:2] if self.alias_mode == "prefix" else raw_aliases[0][2:]
+        # 校验所有别名固定字必须相同（mjs端要求同一批候选必须同一个前缀/后缀）
+        diff_affix = [a for a in raw_aliases if (a[:2] if self.alias_mode == "prefix" else a[2:]) != affix]
+        if diff_affix:
+            mode_label = "前两字" if self.alias_mode == "prefix" else "后两字"
+            raise ValueError(f"同一批别名的{mode_label}必须相同（当前为「{affix}」），不同请分批申请：{'、'.join(diff_affix)}")
+        validated = raw_aliases
         # 3. 确保任务存在
         task = self.add_task(identifier)
         # 4. 确保有剧目信息
@@ -463,14 +472,11 @@ class StationCore:
             raise ValueError("请输入至少一个别名")
         if not task_keys:
             raise ValueError("请先选中任务")
-        # 2. 校验别名格式
-        from manju_editor.material_workflow import valid_alias_candidates
-        affix = self.alias_prefix or self.model_prefix
-        validated = valid_alias_candidates(raw_aliases, prefix=affix, mode=self.alias_mode)
-        if len(validated) != len(set(raw_aliases)):
-            invalid = [a for a in raw_aliases if a not in validated]
-            mode_label = "前缀+两字" if self.alias_mode == "prefix" else "两字+后缀"
-            raise ValueError(f"以下别名不符合格式（{mode_label}，固定字为「{affix}」）：{'、'.join(invalid)}")
+        # 2. 校验别名格式（手动别名不被前缀后缀限制，只要求恰好4个中文字）
+        invalid = [a for a in raw_aliases if not re.fullmatch(r"[\u4e00-\u9fff]{4}", a)]
+        if invalid:
+            raise ValueError(f"以下别名必须恰好是4个中文汉字：{'、'.join(invalid)}")
+        validated = raw_aliases
         # 3. 逐个任务分配别名
         results = []
         for idx, task_key in enumerate(task_keys):
@@ -479,6 +485,8 @@ class StationCore:
                 continue
             # 分配别名：索引超限时用最后一个
             alias = validated[min(idx, len(validated) - 1)]
+            # 从别名自动提取固定字（前缀模式取前两字，后缀模式取后两字）
+            affix = alias[:2] if self.alias_mode == "prefix" else alias[2:]
             # 确保有剧目信息
             info = self._locate_info(task, self.data_root / "选剧文件夹" / "原剧视频")
             if not info:
@@ -541,7 +549,7 @@ class StationCore:
         self._on_progress = callback
 
     def set_alias_prefix(self, prefix: str) -> None:
-        """设置用户手动指定的别名前缀（前两字），空字符串则用默认前缀。"""
+        """设置用户手动指定的别名前缀/后缀（两字），空字符串则不限制（需 fix_affix=False 才生效）。"""
         self.alias_prefix = str(prefix or "").strip()
         self._save_state()
 
@@ -550,6 +558,11 @@ class StationCore:
         if mode not in ("prefix", "suffix"):
             raise ValueError(f"别名模式必须是 prefix 或 suffix， got: {mode}")
         self.alias_mode = mode
+        self._save_state()
+
+    def set_fix_affix(self, enabled: bool) -> None:
+        """设置固定前缀/后缀开关：True=必须在别名前缀框填写固定字，False=AI自由生成4字别名。"""
+        self.fix_affix = bool(enabled)
         self._save_state()
 
     def set_download_only(self, enabled: bool) -> None:
@@ -782,14 +795,11 @@ class StationCore:
         # 手动别名：跳过AI生成，直接用手动别名写入三端别名任务.json
         if task.manual_alias and task.manual_alias_name:
             alias = task.manual_alias_name.strip()
-            # 校验别名格式
-            from manju_editor.material_workflow import valid_alias_candidates
-            affix = self.alias_prefix or self.model_prefix
-            validated = valid_alias_candidates([alias], prefix=affix, mode=self.alias_mode)
-            if not validated:
-                mode_label = "前缀+两字" if self.alias_mode == "prefix" else "两字+后缀"
-                raise ValueError(f"手动别名「{alias}」不符合格式（{mode_label}，固定字为「{affix}」）")
-            alias = validated[0]
+            # 手动别名不被前缀后缀限制，直接使用；但必须恰好4个中文字（mjs端要求）
+            if not re.fullmatch(r"[\u4e00-\u9fff]{4}", alias):
+                raise ValueError(f"手动别名「{alias}」必须恰好是4个中文汉字")
+            # 从别名自动提取固定字（前缀模式取前两字，后缀模式取后两字）
+            affix = alias[:2] if self.alias_mode == "prefix" else alias[2:]
             # 写入三端别名任务.json
             import json as _json
             info_dir = Path(task.info_file).parent
@@ -817,7 +827,7 @@ class StationCore:
             tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, task_file)
             task.task_file = str(task_file)
-            task.detail = f"手动别名已写入：{alias}"
+            task.detail = f"手动别名已写入：{alias}（固定字自动识别为「{affix}」）"
             task.updated_at = time.time()
             self._save_state()
             self._emit(task.book_id, task.status, task.detail)
@@ -828,8 +838,10 @@ class StationCore:
         except ImportError as error:
             raise RuntimeError(f"独立软件缺少候选生成模块：{error}") from error
 
+        # 根据 fix_affix 决定是否限制前缀/后缀：选上且有值=用指定固定字，否则=AI自由生成4个字
+        affix = self.alias_prefix if (self.fix_affix and self.alias_prefix) else ""
         candidates = generate_alias_candidates(
-            title, intro, count=3, prefix=self.alias_prefix or self.model_prefix,
+            title, intro, count=3, prefix=affix,
             mode=self.alias_mode,
             excluded={str(task.approved_alias or "").strip()} if task.approved_alias else None,
         )
@@ -841,7 +853,7 @@ class StationCore:
             workflow_batch_id=f"station_{book_id}",
         )
         series_root = self.data_root / "选剧文件夹" / "原剧视频"
-        task_file = write_alias_task(project, candidates, preferred_series_root=series_root, prefix=self.alias_prefix or self.model_prefix, mode=self.alias_mode)
+        task_file = write_alias_task(project, candidates, preferred_series_root=series_root, prefix=affix, mode=self.alias_mode)
         task.task_file = str(task_file)
         task.detail = f"已生成候选别名：{'、'.join(candidates)}"
         task.updated_at = time.time()

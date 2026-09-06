@@ -125,13 +125,18 @@ def main() -> int:
             layout.addLayout(top)
 
             prefix_row = QHBoxLayout()
-            prefix_row.addWidget(QLabel("别名前缀（前两字）："))
+            self.fix_affix_check = QCheckBox("固定前/后两字")
+            self.fix_affix_check.setChecked(core.fix_affix)
+            self.fix_affix_check.stateChanged.connect(self._on_fix_affix_changed)
+            prefix_row.addWidget(self.fix_affix_check)
+            prefix_row.addWidget(QLabel("别名固定字："))
             self.prefix_input = QLineEdit()
-            self.prefix_input.setPlaceholderText("留空自动生成，例如：知夏、雾兽、知夏雾兽")
+            self.prefix_input.setPlaceholderText("选上「固定前/后两字」后在此输入，例如：知夏、年年")
             self.prefix_input.setText(core.alias_prefix)
+            self.prefix_input.setEnabled(core.fix_affix)
             self.prefix_input.editingFinished.connect(self._on_prefix_changed)
             prefix_row.addWidget(self.prefix_input, 1)
-            prefix_row.addWidget(QLabel("（生成的别名会此前缀开头，留空用默认策略）"))
+            prefix_row.addWidget(QLabel("（不选=AI自由生成4个字；选上=必须指定固定字）"))
             layout.addLayout(prefix_row)
 
             options_row = QHBoxLayout()
@@ -186,6 +191,12 @@ def main() -> int:
             self.setCentralWidget(root)
 
         # ---------- UI 动作 ----------
+        def _on_fix_affix_changed(self, state: int) -> None:
+            enabled = state == 2  # Qt.Checked
+            core.set_fix_affix(enabled)
+            self.prefix_input.setEnabled(enabled)
+            self._append_log(f"固定前/后两字：{'已开启' if enabled else '已关闭（AI自由生成4个字）'}")
+
         def _on_prefix_changed(self) -> None:
             value = self.prefix_input.text().strip()
             core.set_alias_prefix(value)
