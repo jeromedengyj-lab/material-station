@@ -1,4 +1,4 @@
-﻿"""素材准备站核心调度器。
+"""素材准备站核心调度器。
 
 三功能（下载原剧视频 / 下载封面 / 申请三端关键词别名）从漫剧自动任务中心剥离后，
 在本独立软件中以「BookID 手动输入」为任务来源串行执行：
@@ -350,21 +350,41 @@ class StationCore:
                 alias_names = [a.strip() for a in re.split(r"[|,，]", alias_part) if a.strip()] if alias_part else []
                 try:
                     task = self.add_task(identifier)
-                    if alias_names:
-                        # 有别名：标记为手动别名模式
-                        task.manual_alias = True
-                        task.manual_alias_names = alias_names
-                        task.manual_alias_name = alias_names[0]  # 兼容单个别名
-                        task.detail = f"手动别名：{'、'.join(alias_names)}"
-                        self._save_state()
-                    added.append(task.input_value or task.book_id)
                 except ValueError as error:
-                    # 已存在的任务算跳过，其他错误算失败
                     msg = str(error)
                     if "已在任务列表中" in msg:
-                        skipped.append(identifier)
+                        # 重复剧名：有别名则追加别名重新执行，无别名则跳过
+                        task_key = f"title:{identifier}" if not _is_book_id(identifier) else identifier
+                        existing = self._tasks.get(task_key)
+                        if alias_names and existing and existing.status not in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
+                            # 追加新别名，去重
+                            existing.manual_alias = True
+                            merged = list(dict.fromkeys((existing.manual_alias_names or []) + alias_names))
+                            existing.manual_alias_names = merged
+                            existing.manual_alias_name = merged[0]
+                            existing.detail = f"手动别名（追加）：{'、'.join(merged)}"
+                            # 重置状态重新入队
+                            existing.status = STATUS_QUEUED
+                            existing.error = ""
+                            existing.task_file = ""  # 清空旧任务文件，重新生成
+                            if existing.book_id not in self._queue:
+                                self._queue.append(existing.book_id)
+                            existing.updated_at = time.time()
+                            self._save_state()
+                            added.append(existing.input_value or existing.book_id)
+                        else:
+                            skipped.append(identifier)  # 无别名或正在执行，跳过
                     else:
                         failed.append((identifier, msg))
+                    continue
+                if alias_names:
+                    # 有别名：标记为手动别名模式
+                    task.manual_alias = True
+                    task.manual_alias_names = alias_names
+                    task.manual_alias_name = alias_names[0]  # 兼容单个别名
+                    task.detail = f"手动别名：{'、'.join(alias_names)}"
+                    self._save_state()
+                added.append(task.input_value or task.book_id)
         return {"added": added, "skipped": skipped, "failed": failed}
 
     def remove_task(self, book_id: str) -> None:

@@ -213,7 +213,8 @@ async function submitAlias(c,alias,bookId){
  if(!selected)return {ok:false,reason:'当前可见下拉列表找不到“解说混剪”'};
  let clicked=false;
  for(let i=0;i<40&&!clicked;i++){
-   const formState=await ev(c,`(()=>{let d=${visibleDialog};if(!d)return {dialog:false};let alias=${JSON.stringify('ALIAS')},input=[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名')),submit=[...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='提交'),text=d.innerText||'';return {dialog:true,aliasOk:input?.value===alias,typeOk:text.includes('解说混剪'),submitEnabled:!!submit&&!submit.disabled}})()`.replace('ALIAS',alias));
+   const formState=await ev(c,`(()=>{let d=${visibleDialog};if(!d)return {dialog:false};let alias=${JSON.stringify('ALIAS')},input=[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名')),submit=[...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='提交'),text=d.innerText||'';let duplicate=/你已申请此别名|已有相同书名存在|别名已存在|该别名已被使用|该别名已被他人申请|已被他人申请|他人已申请|此别名已被|请勿重复申请/.test(text);return {dialog:true,aliasOk:input?.value===alias,typeOk:text.includes('解说混剪'),submitEnabled:!!submit&&!submit.disabled,duplicate}})()`.replace('ALIAS',alias));
+   if(formState.dialog&&formState.duplicate){return {ok:false,reason:{duplicate:true,message:'平台提示该别名已申请过',dialogText:formState.dialogText}}}
    if(formState.dialog&&!formState.aliasOk){
      const focused=await ev(c,`(()=>{let d=${visibleDialog},i=d&&[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名'));if(!i)return false;i.focus();i.select();return document.activeElement===i})()`);
      if(focused)await c.send('Input.insertText',{text:alias});
