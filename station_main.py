@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import sys
 import time
@@ -17,6 +18,31 @@ import time
 from pathlib import Path
 
 STATION_VERSION = "v1.0"
+
+
+def export_tasks_to_csv(tasks: list, path: str | Path) -> int:
+    """把任务列表导出为 CSV（UTF-8 BOM，Excel 可直接打开，中文不乱码）。
+
+    只读导出：不修改任何任务状态，不清除界面信息。
+    tasks: 每项含 input_value / book_id / title / status_text / detail / updated_at。
+    返回导出的行数。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["序号", "输入", "剧名", "状态", "详情", "时间"])
+        for row, task in enumerate(tasks, start=1):
+            display_input = str(task.get("input_value") or task.get("book_id") or "")
+            writer.writerow([
+                row,
+                display_input,
+                task.get("title") or "-",
+                task.get("status_text") or task.get("status") or "",
+                task.get("detail") or "",
+                task.get("time_text") or "",
+            ])
+    return len(tasks)
 
 def _tool_root() -> Path:
     configured = str(os.environ.get("MANJU_TOOL_ROOT", "") or "").strip()
@@ -81,6 +107,7 @@ def main() -> int:
             self.resize(1080, 640)
             self._build_ui()
             self._log_lines: list[str] = []
+            self._last_export_dir: str | None = None
             self._tick_timer = QTimer(self)
             self._tick_timer.timeout.connect(self._on_tick)
             self._tick_timer.start(2000)
@@ -116,6 +143,9 @@ def main() -> int:
             open_dir_btn = QPushButton("打开产出目录")
             open_dir_btn.clicked.connect(self._open_output)
             top.addWidget(open_dir_btn)
+            export_btn = QPushButton("下载到表格")
+            export_btn.clicked.connect(self._export_to_table)
+            top.addWidget(export_btn)
             layout.addLayout(top)
 
             prefix_row = QHBoxLayout()
@@ -305,6 +335,48 @@ def main() -> int:
             path = core.data_root / "选剧文件夹" / "原剧视频"
             path.mkdir(parents=True, exist_ok=True)
             os.startfile(str(path))  # noqa: S606
+
+        def _export_to_table(self) -> None:
+            """一键把当前任务列表导出为表格（CSV，Excel 可直接打开）。
+
+            路径由用户选择；只读导出，不清除界面任务信息。
+            """
+            tasks = core.tasks
+            if not tasks:
+                QMessageBox.information(self, "下载到表格", "当前没有任务可导出")
+                return
+            default_name = time.strftime("素材准备站任务_%Y%m%d_%H%M%S.csv")
+            default_dir = self._last_export_dir or str(core.data_root)
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "保存任务表格", str(Path(default_dir) / default_name),
+                "CSV 表格 (*.csv);;所有文件 (*.*)",
+            )
+            if not file_path:
+                return
+            if not file_path.lower().endswith(".csv"):
+                file_path += ".csv"
+            rows = [
+                {
+                    "input_value": task.input_value or "",
+                    "book_id": task.book_id,
+                    "title": task.title or "",
+                    "status_text": self._STATUS_TEXT.get(task.status, task.status),
+                    "detail": task.detail or "",
+                    "time_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(task.updated_at)),
+                }
+                for task in tasks
+            ]
+            try:
+                count = export_tasks_to_csv(rows, file_path)
+            except Exception as error:  # noqa: BLE001
+                QMessageBox.critical(self, "导出失败", f"写入表格失败：{error}")
+                return
+            self._last_export_dir = str(Path(file_path).resolve().parent)
+            self._append_log(f"已导出 {count} 条任务到表格：{file_path}")
+            QMessageBox.information(
+                self, "下载到表格",
+                f"已导出 {count} 条任务\n保存位置：{file_path}\n（界面任务信息未做任何改动）",
+            )
 
         # ---------- 更新 ----------
         def _on_progress(self, book_id: str, status: str, detail: str) -> None:
