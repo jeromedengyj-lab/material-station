@@ -93,7 +93,8 @@ class StationTask:
     input_value: str = ""          # 用户输入原始值（BookID 或剧名）
     resolved_book_id: str = ""     # 剧名模式下载后回填的真实平台 BookID
     manual_alias: bool = False     # True=手动别名申请，跳过下载和生成直接进入三端申请
-    manual_alias_name: str = ""     # 手动指定的别名（从txt解析或UI输入）
+    manual_alias_name: str = ""     # 手动指定的别名（从txt解析或UI输入，兼容单个别名）
+    manual_alias_names: list = field(default_factory=list)  # 手动指定的多个别名（作为候选依次尝试）
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -341,17 +342,20 @@ class StationCore:
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue  # 空行和注释行跳过
-                # 解析可选别名：用分号或制表符分隔（不支持逗号，因为剧名里可能包含逗号）
-                parts = re.split(r"[;\t]", line, maxsplit=1)
+                # 解析可选别名：用英文分号/中文分号/制表符分隔（不支持逗号，因为剧名里可能包含逗号）
+                parts = re.split(r"[;；\t]", line, maxsplit=1)
                 identifier = parts[0].strip()
-                alias_name = parts[1].strip() if len(parts) > 1 else ""
+                alias_part = parts[1].strip() if len(parts) > 1 else ""
+                # 多个别名用中文逗号/英文逗号分隔，作为候选依次尝试
+                alias_names = [a.strip() for a in re.split(r"[,，]", alias_part) if a.strip()] if alias_part else []
                 try:
                     task = self.add_task(identifier)
-                    if alias_name:
+                    if alias_names:
                         # 有别名：标记为手动别名模式
                         task.manual_alias = True
-                        task.manual_alias_name = alias_name
-                        task.detail = f"手动别名：{alias_name}"
+                        task.manual_alias_names = alias_names
+                        task.manual_alias_name = alias_names[0]  # 兼容单个别名
+                        task.detail = f"手动别名：{'、'.join(alias_names)}"
                         self._save_state()
                     added.append(task.input_value or task.book_id)
                 except ValueError as error:
@@ -794,19 +798,29 @@ class StationCore:
         intro = str(info.get("description", "") or "").strip()
         book_id = str(info.get("book_id", "") or task.book_id).strip()
 
-        # 手动别名：跳过AI生成，直接用手动别名写入三端别名任务.json
-        if task.manual_alias and task.manual_alias_name:
-            alias = task.manual_alias_name.strip()
+        # 手动别名：跳过AI生成，直接用手动别名写入三端别名任务.json（支持多个别名作为候选）
+        if task.manual_alias and (task.manual_alias_names or task.manual_alias_name):
+            aliases = task.manual_alias_names if task.manual_alias_names else [task.manual_alias_name.strip()]
+            aliases = [a.strip() for a in aliases if a.strip()]
             # 手动别名不被前缀后缀限制，直接使用；但必须恰好4个中文字（mjs端要求）
-            if not re.fullmatch(r"[\u4e00-\u9fff]{4}", alias):
-                raise ValueError(f"手动别名「{alias}」必须恰好是4个中文汉字")
-            # 从别名自动提取固定字（前缀模式取前两字，后缀模式取后两字）
-            affix = alias[:2] if self.alias_mode == "prefix" else alias[2:]
+            invalid = [a for a in aliases if not re.fullmatch(r"[\u4e00-\u9fff]{4}", a)]
+            if invalid:
+                raise ValueError(f"以下手动别名必须恰好是4个中文汉字：{'、'.join(invalid)}")
+            # 从第一个别名自动提取固定字（前缀模式取前两字，后缀模式取后两字）
+            affix = aliases[0][:2] if self.alias_mode == "prefix" else aliases[0][2:]
+            # 校验所有别名固定字必须相同（mjs端要求同一批候选必须同一个前缀/后缀）
+            diff_affix = [a for a in aliases if (a[:2] if self.alias_mode == "prefix" else a[2:]) != affix]
+            if diff_affix:
+                mode_label = "前两字" if self.alias_mode == "prefix" else "后两字"
+                raise ValueError(f"同一批手动别名的{mode_label}必须相同（当前为「{affix}」），不同请分批申请：{'、'.join(diff_affix)}")
+            # 去重
+            aliases = list(dict.fromkeys(aliases))
             # 写入三端别名任务.json
             import json as _json
             info_dir = Path(task.info_file).parent
             task_file = info_dir / "三端别名任务.json"
             now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            rows = [{"order": i + 1, "alias": a, "status": "queued", "platforms": {}} for i, a in enumerate(aliases)]
             payload = {
                 "version": 2,
                 "task_id": f"station_{book_id}",
@@ -817,8 +831,8 @@ class StationCore:
                 "alias_mode": self.alias_mode,
                 "status": "queued",
                 "current_index": 0,
-                "candidate_rows": [{"order": 1, "alias": alias, "status": "queued", "platforms": {}}],
-                "candidates": [alias],
+                "candidate_rows": rows,
+                "candidates": aliases,
                 "history": [],
                 "platforms": {},
                 "approved_alias": "",
@@ -830,7 +844,7 @@ class StationCore:
             tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, task_file)
             task.task_file = str(task_file)
-            task.detail = f"手动别名已写入：{alias}（固定字自动识别为「{affix}」，{self.alias_mode}模式）"
+            task.detail = f"手动别名已写入：{'、'.join(aliases)}（固定字自动识别为「{affix}」，{self.alias_mode}模式）"
             task.updated_at = time.time()
             self._save_state()
             self._emit(task.book_id, task.status, task.detail)
