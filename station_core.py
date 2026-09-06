@@ -294,8 +294,10 @@ class StationCore:
         self._emit(book_id, task.status, "已加入队列")
         return task
 
-    def add_task(self, identifier: str) -> StationTask:
-        """统一入口：自动判断输入是 BookID（16~20位纯数字）还是剧名。"""
+    def add_task(self, identifier: str, alias_key: str = "") -> StationTask:
+        """统一入口：自动判断输入是 BookID（16~20位纯数字）还是剧名。
+        alias_key：剧名模式下，每行一个别名时用 剧名:别名 作为独立任务key；
+                   同一行多个别名时不传 alias_key，用 剧名 作为key，多个别名作为候选。"""
         identifier = str(identifier or "").strip()
         if not identifier:
             raise ValueError("请输入 BookID 或剧名")
@@ -304,7 +306,8 @@ class StationCore:
         # 剧名模式
         if len(identifier) > 100:
             raise ValueError("剧名过长（最多 100 字）")
-        task_key = f"title:{identifier}"
+        # 任务key：有alias_key时用 剧名:别名（独立任务），否则用 剧名（多候选任务）
+        task_key = f"title:{identifier}:{alias_key}" if alias_key else f"title:{identifier}"
         existing = self._tasks.get(task_key)
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"剧名「{identifier}」已在任务列表中")
@@ -349,31 +352,51 @@ class StationCore:
                 # 多个别名首选竖线|分隔，兼容中文逗号，、英文逗号,
                 alias_names = [a.strip() for a in re.split(r"[|,，]", alias_part) if a.strip()] if alias_part else []
                 try:
-                    task = self.add_task(identifier)
+                    # 任务key策略：
+                    # - BookID：用 BookID 作为key
+                    # - 剧名+多个别名（同一行）：用 剧名 作为key，多个别名作为候选
+                    # - 剧名+单个别名（每行一个）：用 剧名:别名 作为key，独立任务
+                    # - 剧名+无别名：用 剧名 作为key
+                    is_book = _is_book_id(identifier)
+                    if is_book:
+                        task = self.add_book_id(identifier)
+                    elif len(alias_names) > 1:
+                        # 同一行多个别名 → 同一个任务，多个候选
+                        task = self.add_task(identifier)
+                    elif len(alias_names) == 1:
+                        # 每行一个别名 → 独立任务，key=剧名:别名
+                        task = self.add_task(identifier, alias_key=alias_names[0])
+                    else:
+                        # 无别名 → 用剧名作为key
+                        task = self.add_task(identifier)
                 except ValueError as error:
                     msg = str(error)
                     if "已在任务列表中" in msg:
-                        # 重复剧名：有别名则追加别名重新执行，无别名则跳过
-                        task_key = f"title:{identifier}" if not _is_book_id(identifier) else identifier
-                        existing = self._tasks.get(task_key)
-                        if alias_names and existing and existing.status not in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
-                            # 追加新别名，去重
-                            existing.manual_alias = True
-                            merged = list(dict.fromkeys((existing.manual_alias_names or []) + alias_names))
-                            existing.manual_alias_names = merged
-                            existing.manual_alias_name = merged[0]
-                            existing.detail = f"手动别名（追加）：{'、'.join(merged)}"
-                            # 重置状态重新入队
-                            existing.status = STATUS_QUEUED
-                            existing.error = ""
-                            existing.task_file = ""  # 清空旧任务文件，重新生成
-                            if existing.book_id not in self._queue:
-                                self._queue.append(existing.book_id)
-                            existing.updated_at = time.time()
-                            self._save_state()
-                            added.append(existing.input_value or existing.book_id)
+                        # 重复任务：只有"剧名+多个别名"模式才追加别名，其他模式跳过
+                        is_book = _is_book_id(identifier)
+                        if not is_book and len(alias_names) > 1:
+                            task_key = f"title:{identifier}"
+                            existing = self._tasks.get(task_key)
+                            if existing and existing.status not in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
+                                # 追加新别名，去重
+                                existing.manual_alias = True
+                                merged = list(dict.fromkeys((existing.manual_alias_names or []) + alias_names))
+                                existing.manual_alias_names = merged
+                                existing.manual_alias_name = merged[0]
+                                existing.detail = f"手动别名（追加）：{'、'.join(merged)}"
+                                # 重置状态重新入队
+                                existing.status = STATUS_QUEUED
+                                existing.error = ""
+                                existing.task_file = ""
+                                if existing.book_id not in self._queue:
+                                    self._queue.append(existing.book_id)
+                                existing.updated_at = time.time()
+                                self._save_state()
+                                added.append(existing.input_value or existing.book_id)
+                            else:
+                                skipped.append(identifier)
                         else:
-                            skipped.append(identifier)  # 无别名或正在执行，跳过
+                            skipped.append(identifier)  # BookID或单别名独立任务重复，跳过
                     else:
                         failed.append((identifier, msg))
                     continue
