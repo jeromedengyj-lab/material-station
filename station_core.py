@@ -171,6 +171,8 @@ class StationTask:
     manual_alias: bool = False     # True=手动别名申请，跳过下载和生成直接进入三端申请
     manual_alias_name: str = ""     # 手动指定的别名（从txt解析或UI输入，兼容单个别名）
     manual_alias_names: list = field(default_factory=list)  # 手动指定的多个别名（作为候选依次尝试）
+    content_type: str = ""          # 内容类型：manju=漫剧 / wangwen=网文 / duanju=短剧；空=不限制（mjs 默认漫剧）
+    expected_episodes: int = 0      # 期望集数（同名同标签时精确区分）；0=不限制
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -201,6 +203,8 @@ class StationCore:
         self.node_command = str(node_command) if node_command else self._find_node()
         self.model_prefix = model_prefix
         self.model_candidates = list(model_candidates)
+        self.content_type = ""          # 全局默认内容类型：空=不限制（mjs 兜底漫剧），UI 可选 网文/漫剧/短剧
+        self.expected_episodes = 0      # 全局默认期望集数：0=不限制
         self._tasks: dict[str, StationTask] = {}
         self._queue: list[str] = []
         self._review_queue: list[str] = []  # 已提交三端、待统一审核的任务
@@ -322,6 +326,12 @@ class StationCore:
         saved_manual_mode = data.get("manual_mode") if isinstance(data, dict) else None
         if isinstance(saved_manual_mode, bool):
             self.manual_mode = saved_manual_mode
+        saved_content_type = data.get("content_type") if isinstance(data, dict) else None
+        if isinstance(saved_content_type, str) and saved_content_type in ("manju", "wangwen", "duanju", ""):
+            self.content_type = saved_content_type
+        saved_episodes = data.get("expected_episodes") if isinstance(data, dict) else None
+        if isinstance(saved_episodes, int) and saved_episodes >= 0:
+            self.expected_episodes = saved_episodes
         for book_id in list(self._tasks):
             task = self._tasks[book_id]
             if task.status in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
@@ -344,6 +354,8 @@ class StationCore:
             "download_only": self.download_only,
             "alias_only": self.alias_only,
             "manual_mode": self.manual_mode,
+            "content_type": self.content_type,
+            "expected_episodes": self.expected_episodes,
             "tasks": {book_id: task.to_dict() for book_id, task in self._tasks.items()},
         }
         path = self._state_file()
@@ -366,10 +378,14 @@ class StationCore:
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"BookID {book_id} 已在任务列表中")
         task = StationTask(book_id=book_id, input_type="book_id", input_value=book_id)
+        task.content_type = self.content_type
+        task.expected_episodes = self.expected_episodes
         if existing:
             # 重新入队：清空旧进度，保留标题便于展示
             task.title = existing.title
             task.resolved_book_id = existing.resolved_book_id or book_id
+            task.content_type = self.content_type or existing.content_type
+            task.expected_episodes = self.expected_episodes or existing.expected_episodes
         self._tasks[book_id] = task
         if self.manual_mode:
             task.status = STATUS_PENDING_MANUAL
@@ -401,9 +417,13 @@ class StationCore:
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"剧名「{identifier}」已在任务列表中")
         task = StationTask(book_id=task_key, input_type="title", input_value=identifier)
+        task.content_type = self.content_type
+        task.expected_episodes = self.expected_episodes
         if existing:
             task.title = existing.title
             task.resolved_book_id = existing.resolved_book_id
+            task.content_type = self.content_type or existing.content_type
+            task.expected_episodes = self.expected_episodes or existing.expected_episodes
         self._tasks[task_key] = task
         if self.manual_mode:
             task.status = STATUS_PENDING_MANUAL
@@ -732,6 +752,79 @@ class StationCore:
         self.alias_mode = mode
         self._save_state()
 
+    def set_content_type(self, type_key: str) -> None:
+        """设置全局内容类型：manju=漫剧 / wangwen=网文 / duanju=短剧；空=不限制（mjs 默认漫剧）。"""
+        type_key = str(type_key or "").strip()
+        if type_key and type_key not in ("manju", "wangwen", "duanju"):
+            raise ValueError(f"内容类型只支持 manju/wangwen/duanju，got: {type_key}")
+        self.content_type = type_key
+        self._save_state()
+
+    def set_expected_episodes(self, episodes: int) -> None:
+        """设置全局期望集数（0=不限制），用于同名同标签时精确区分。"""
+        try:
+            value = int(str(episodes or 0).strip())
+        except ValueError as error:
+            raise ValueError(f"集数必须是整数，got: {episodes}") from error
+        self.expected_episodes = max(0, value)
+        self._save_state()
+
+    # ---------- 识图（Windows 系统 OCR，零依赖） ----------
+    def ocr_image(self, image_path: str | Path) -> list[dict]:
+        """对图片执行 Windows 系统 OCR，返回按行排列的识别结果 [{line, text, words:[{text,conf}]}]。
+
+        绿色软件零依赖方案：调用内置 ocr.ps1（WinRT OcrEngine，Win10+ 自带中文语言包）。
+        失败时抛 RuntimeError 并附系统返回信息。
+        """
+        image_path = Path(image_path)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"图片不存在：{image_path}")
+        ps1 = self.adapter_dir / "ocr.ps1"
+        if not ps1.is_file():
+            raise RuntimeError(f"缺少内置 ocr.ps1：{ps1}")
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if not powershell:
+            raise RuntimeError("系统缺少 PowerShell，无法执行识图")
+        cmd = [
+            powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(ps1), "-ImagePath", str(image_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
+        output = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not output:
+            raise RuntimeError(f"识图失败：{(proc.stderr or '').strip()[-400:] or '无输出'}")
+        try:
+            payload = json.loads(output)
+        except ValueError as error:
+            raise RuntimeError(f"识图输出解析失败：{output[:200]}") from error
+        if not payload.get("ok"):
+            raise RuntimeError(str(payload.get("message") or "识图失败"))
+        return payload.get("lines") or []
+
+    @staticmethod
+    def parse_ocr_meta(lines: list[dict]) -> dict:
+        """从 OCR 行提取 {title, episodes, content_type}。
+
+        - content_type：优先精确词 网文/漫剧/短剧（可被「剧名包含同词」干扰时取首次出现）
+        - episodes：正则 `(\d{1,4})\s*集` / `第(\d+)集`，识别不出返回 0
+        - title：取最长非空行（海报标题通常是最大最完整的文字），允许 UI 修正
+        """
+        texts = [str(x.get("text", "") or "").strip() for x in lines if str(x.get("text", "") or "").strip()]
+        meta: dict = {"title": "", "episodes": 0, "content_type": ""}
+        for text in texts:
+            for key, label in (("manju", "漫剧"), ("wangwen", "网文"), ("duanju", "短剧")):
+                if label in text:
+                    meta["content_type"] = key
+                    break
+            if not meta["episodes"]:
+                m = re.search(r"(\d{1,4})\s*集", text) or re.search(r"第\s*(\d{1,4})\s*集", text)
+                if m:
+                    meta["episodes"] = int(m.group(1))
+        if texts:
+            meta["title"] = max(texts, key=len)
+        return meta
+        self._save_state()
+
     def set_fix_affix(self, enabled: bool) -> None:
         """设置固定前缀/后缀开关：True=必须在别名前缀框填写固定字，False=AI自由生成4字别名。"""
         self.fix_affix = bool(enabled)
@@ -904,12 +997,15 @@ class StationCore:
         adapter = self._adapter("task-platform-download.mjs")
         log_path = self._log_file(task, "download")
         extra_args = ["--info-only"] if info_only else []
+        content_type = (task.content_type or self.content_type or "manju").strip()
+        if task.expected_episodes > 0:
+            extra_args = [*extra_args, "--expected-episodes", str(task.expected_episodes)]
         if task.input_type == "title":
             cmd = [
                 self.node_command, "--experimental-websocket",
                 str(adapter),
                 "--title", task.input_value,
-                "--content-type", "manju",
+                "--content-type", content_type,
                 "--output-dir", str(download_dir),
                 "--cover-output-dir", str(cover_dir),
                 *extra_args,
@@ -919,7 +1015,7 @@ class StationCore:
                 self.node_command, "--experimental-websocket",
                 str(adapter),
                 "--book-id", task.book_id,
-                "--content-type", "manju",
+                "--content-type", content_type,
                 "--output-dir", str(download_dir),
                 "--cover-output-dir", str(cover_dir),
                 *extra_args,

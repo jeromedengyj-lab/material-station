@@ -7,6 +7,7 @@ import {Readable} from 'node:stream';
 import {finished} from 'node:stream/promises';
 import {matchRejectText, REJECT_MATCH_JS} from './reject-patterns.mjs';
 import {validateCandidates} from './candidate-validation.mjs';
+import {CONTENT_TYPE_LABELS, bookMatchesType, bookEpisodes, bookTypeLabels, pickUniqueBook} from './book-matching.mjs';
 import {resolveSharedRoot} from './shared-root.mjs';
 
 let ROOT;
@@ -48,8 +49,9 @@ const ROLE_LOCK=path.join(ROLE_LOCK_DIR,`${BROWSER_ROLE}.lock`);
 const val=argValue;
 let title=String(taskManifest.title||val('--title')).trim(), loginOnly=argv.includes('--login-only'),inspectOnly=argv.includes('--inspect-current'),infoOnly=argv.includes('--info-only');
 const requestedContentType=(val('--content-type').trim().toLowerCase()||'manju');
-if(requestedContentType!=='manju')throw new Error('原剧下载入口当前只允许 content-type=manju');
+if(!Object.prototype.hasOwnProperty.call(CONTENT_TYPE_LABELS,requestedContentType))throw new Error(`--content-type 只支持 ${Object.keys(CONTENT_TYPE_LABELS).join('/')}，收到：${requestedContentType}`);
 const DOWNLOAD_TAB=16;
+let ACTIVE_TAB=DOWNLOAD_TAB; // 实际内容 tab：由搜索结果的 content_tab 动态决定（网文/漫剧/短剧各不相同）
 const batchId=String(taskManifest.batch_id||val('--batch-id')).trim();
 const expectedEpisodesRaw=val('--expected-episodes').trim();
 let expectedEpisodes=expectedEpisodesRaw?Number(expectedEpisodesRaw):0;
@@ -143,12 +145,12 @@ const unwrap=x=>x?.data?.data??x?.data??x;
 async function search(c,query=title){return ev(c,`(()=>{const V=e=>{let r=e.getBoundingClientRect();return r.width>40&&r.height>10&&!e.disabled},q=${JSON.stringify(String(query||'').trim())},i=[...document.querySelectorAll('input')].find(e=>V(e)&&/搜索|剧名|书名|关键词/.test(e.placeholder||e.getAttribute('aria-label')||''));if(!i)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,q);i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}));i.focus();let b=[...document.querySelectorAll('button,[role=button]')].find(e=>V(e)&&/搜索/.test((e.innerText||'').trim()));if(b)b.click();else i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,bubbles:true}));return true})()`)}
 async function clickTitle(c){return ev(c,`(()=>{let norm=s=>String(s||'').normalize('NFKC').replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),V=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},a=[...document.querySelectorAll('body *')].filter(e=>V(e)&&norm(e.innerText||e.textContent||'')===q).sort((x,y)=>x.children.length-y.children.length),e=a[0];if(!e)return false;e=(e.closest('a,button,[role=button],[class*=card],[class*=item]')||e);e.scrollIntoView({block:'center'});e.click();return true})()`)}
 async function titleDiagnostics(c){return ev(c,`(()=>{let norm=s=>String(s||'').normalize('NFKC').replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),V=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},m=[...document.querySelectorAll('body *')].filter(e=>V(e)&&norm(e.innerText||e.textContent||'')===q).slice(0,10);return m.map(e=>{let a=[],x=e;for(let i=0;x&&i<7;i++,x=x.parentElement)a.push({tag:x.tagName,cls:String(x.className||'').slice(0,300),role:x.getAttribute('role'),text:(x.innerText||'').trim().slice(0,500),html:x.outerHTML.slice(0,1200)});return a})})()`)}
-async function visibleCardTypeEvidence(c){return ev(c,`(()=>{const norm=s=>String(s||'').normalize('NFKC').replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),episodes=${JSON.stringify(String(expectedEpisodes||''))},visible=e=>{const r=e.getBoundingClientRect();return r.width>2&&r.height>2},exact=[...document.querySelectorAll('body *')].filter(e=>visible(e)&&norm(e.innerText||e.textContent||'')===q).sort((a,b)=>a.children.length-b.children.length);for(const node of exact){let e=node;for(let depth=0;e&&depth<9;depth++,e=e.parentElement){const text=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();if(text.length>1600)continue;const typeOk=/(^|\\s)漫剧($|\\s)/.test(text)||text.includes('漫剧');const episodeOk=!episodes||new RegExp(episodes+'\\s*集').test(text);if(typeOk&&episodeOk)return {ok:true,text:text.slice(0,800),depth}}}return {ok:false,exactTitleNodes:exact.length}})()`)}
+async function visibleCardTypeEvidence(c,typeLabel='漫剧'){return ev(c,`(()=>{const norm=s=>String(s||'').normalize('NFKC').replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),episodes=${JSON.stringify(String(expectedEpisodes||''))},typeLabel=${JSON.stringify(typeLabel)},visible=e=>{const r=e.getBoundingClientRect();return r.width>2&&r.height>2},exact=[...document.querySelectorAll('body *')].filter(e=>visible(e)&&norm(e.innerText||e.textContent||'')===q).sort((a,b)=>a.children.length-b.children.length);for(const node of exact){let e=node;for(let depth=0;e&&depth<9;depth++,e=e.parentElement){const text=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();if(text.length>1600)continue;const typeOk=/(^|\\s)${typeLabel.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}($|\\s)/.test(text)||text.includes(typeLabel);const episodeOk=!episodes||new RegExp(episodes+'\\s*集').test(text);if(typeOk&&episodeOk)return {ok:true,text:text.slice(0,800),depth}}}return {ok:false,exactTitleNodes:exact.length}})()`)}
 async function download(u,file){const part=file+'.part';let n=0;try{n=(await fsp.stat(part)).size}catch{}const r=await fetch(u,{headers:n?{Range:`bytes=${n}-`}:{},redirect:'follow'});if(!(r.ok||r.status===206)||!r.body)throw Error(`HTTP ${r.status}`);const out=fs.createWriteStream(part,{flags:n&&r.status===206?'a':'w'});await finished(Readable.fromWeb(r.body).pipe(out));await fsp.rename(part,file)}
 async function requestBatchExport(c,startEpisode=1,endEpisode=0){
  const activeTab=await ev(c,`(()=>{try{return Number(new URL(location.href).searchParams.get('tab_type')||0)}catch{return 0}})()`);
- if(activeTab!==DOWNLOAD_TAB){
-   console.error(`BATCH_EXPORT_CONTROL_STAGE=content_type_mismatch expected_tab=${DOWNLOAD_TAB} actual_tab=${activeTab}`);
+ if(activeTab!==ACTIVE_TAB){
+   console.error(`BATCH_EXPORT_CONTROL_STAGE=content_type_mismatch expected_tab=${ACTIVE_TAB} actual_tab=${activeTab}`);
    return 0;
  }
  const dialogState=()=>ev(c,`(()=>{const visible=e=>{const r=e.getBoundingClientRect();return r.width>2&&r.height>2},dialogs=[...document.querySelectorAll('[role=dialog],.arco-modal')].filter(visible),dialog=dialogs.find(e=>(e.innerText||'').includes('批量下载'));if(!dialog)return {open:false};const inputs=[...dialog.querySelectorAll('input')].filter(e=>['开始集数','结束集数'].includes(e.placeholder)),button=[...dialog.querySelectorAll('button,[role=button]')].find(e=>(e.innerText||e.textContent||'').trim()==='下载');return {open:true,inputCount:inputs.length,values:inputs.map(e=>e.value),ariaNow:inputs.map(e=>e.getAttribute('aria-valuenow')),max:inputs.map(e=>e.getAttribute('aria-valuemax')),downloadFound:!!button,downloadDisabled:button?!!button.disabled||button.getAttribute('aria-disabled')==='true':null,text:(dialog.innerText||'').replace(/\\s+/g,' ').slice(0,500)}})()`);
@@ -421,39 +423,38 @@ try{
    exact=books.filter(x=>String(x.book_id)===directBookId);
    if(exact.length!==1)die(exact.length?`发现 ${exact.length} 个相同BookID结果，已停止以避免下错。`:`按BookID ${directBookId} 未找到唯一结果。候选：${books.slice(0,15).map(x=>x.book_name||x.name).filter(Boolean).join('、')||'无'}`,10);
  }else{
-   // 先精确匹配（含标点，只去空白），匹配不到再去标点模糊匹配，优先精确结果避免找错剧
-   const strictMatch=books.filter(x=>String(x.book_name||x.name).trim()===title.trim());
-   exactByTitle=strictMatch.length?strictMatch:books.filter(x=>normalizeTitle(x.book_name||x.name)===normalizeTitle(title));
-   exact=expectedEpisodes?exactByTitle.filter(x=>Number(x.chapter_num||x.chapter_count||x.total_chapter_num)===expectedEpisodes):exactByTitle;
-   if(exact.length!==1){
-     const sameName=exactByTitle.map(x=>`${x.book_name||x.name}（${x.chapter_num||x.chapter_count||x.total_chapter_num||'未知'}集）`).join('、');
-     if(expectedEpisodes&&exactByTitle.length)die(`原剧名匹配，但没有唯一的 ${expectedEpisodes} 集结果。同名候选：${sameName}`,10);
-     die(exact.length?`发现 ${exact.length} 个同名结果，已停止以避免下错。`:`无唯一精确匹配。候选：${books.slice(0,15).map(x=>x.book_name||x.name).filter(Boolean).join('、')||'无'}`,10);
-   }
+    // 先精确匹配（含标点，只去空白），匹配不到再去标点模糊匹配；随后按内容类型标签+集数精确过滤，避免同名不同标签/不同集数选错剧
+    const matched=pickUniqueBook(books,title,{contentType:requestedContentType,expectedEpisodes:expectedEpisodes||0,normalize:normalizeTitle});
+    exactByTitle=matched.byTitle;
+    exact=matched.filtered;
+    if(exact.length!==1){
+      const sameName=matched.byTitle.map(x=>`${x.book_name||x.name}（${bookEpisodes(x)||'未知'}集${(bookTypeLabels(x)[0]||'')?('·'+bookTypeLabels(x)[0]):''}）`).join('、');
+      if(expectedEpisodes&&matched.byTitle.length)die(`原剧名匹配，但没有唯一的 ${expectedEpisodes} 集${CONTENT_TYPE_LABELS[requestedContentType]||''}结果。同名候选：${sameName}`,10);
+      die(exact.length?`发现 ${exact.length} 个同名同类型结果，已停止以避免下错。同名候选：${sameName}`:`无唯一精确匹配（要求类型：${CONTENT_TYPE_LABELS[requestedContentType]||'不限'}）。候选：${books.slice(0,15).map(x=>x.book_name||x.name).filter(Boolean).join('、')||'无'}`,10);
+    }
  }
  const book=exact[0];
  if(directBookId){title=String(book.book_name||book.name||'').trim();if(!expectedEpisodes)expectedEpisodes=Number(book.chapter_num||book.chapter_count||book.total_chapter_num||0)||0;console.log(`按BookID定位：${title}，${expectedEpisodes||'未知'} 集`)}
  if(expectedBookId&&String(book.book_id)!==expectedBookId)die(`精确同名同集数结果的BookID为 ${book.book_id||'空'}，与要求的 ${expectedBookId} 不一致，已停止。`,24);
  const platformTypeCode=Number(book.content_tab??book.tab_type??NaN);
- const platformTypeLabels=[book.content_tab_name,book.tab_name,book.content_type_name,book.book_type_name,book.type_name,book.category_name]
-   .map(x=>String(x??'').trim()).filter(Boolean);
- const apiSaysManju=platformTypeCode===16||platformTypeLabels.some(x=>x==='漫剧'||x.includes('漫剧'));
- const cardEvidence=apiSaysManju?{ok:false,skipped:true}:await visibleCardTypeEvidence(c);
- const isManju=apiSaysManju||cardEvidence.ok;
- if(!isManju){
+ const platformTypeLabels=bookTypeLabels(book);
+ const apiSaysType=bookMatchesType(book,requestedContentType);
+ const cardEvidence=apiSaysType?{ok:false,skipped:true}:await visibleCardTypeEvidence(c,CONTENT_TYPE_LABELS[requestedContentType]||'漫剧');
+ const isType=apiSaysType||cardEvidence.ok;
+ if(!isType){
    const observed=[Number.isFinite(platformTypeCode)?`tab_type=${platformTypeCode}`:'',...platformTypeLabels].filter(Boolean).join(' / ')||`接口未返回类型标签；同卡片可见标签核验失败（精确标题节点${cardEvidence.exactTitleNodes||0}个）`;
-   die(`精确匹配结果不是“漫剧”（${observed}），已停止，禁止下载或写入任务表。`,22);
+   die(`精确匹配结果不是“${CONTENT_TYPE_LABELS[requestedContentType]||requestedContentType}”（${observed}），已停止，禁止下载或写入任务表。`,22);
  }
- console.log(`精确匹配：${book.book_name}，${book.chapter_num||book.chapter_count||book.total_chapter_num||'未知'} 集${expectedEpisodes?'（已按全集数量核对）':''}，BookID：${book.book_id}，类型：漫剧（${apiSaysManju?'接口字段':'同一结果卡片可见标签'}）`);
+ ACTIVE_TAB=Number.isFinite(platformTypeCode)&&platformTypeCode>0?platformTypeCode:DOWNLOAD_TAB;
+ console.log(`精确匹配：${book.book_name}，${book.chapter_num||book.chapter_count||book.total_chapter_num||'未知'} 集${expectedEpisodes?'（已按全集数量核对）':''}，BookID：${book.book_id}，类型：${CONTENT_TYPE_LABELS[requestedContentType]||'不限'}（${apiSaysType?'接口字段':'同一结果卡片可见标签'}）`);
  // 直接使用平台自己的详情页路由，避免卡片内部文字节点随页面版本变化。
  const detail=new URL('https://koc.fqopenplatform.com/page/member/content/book-detail');
- // 本工作流只下载漫剧。批量接口的 task_type 必须保持为当前内容页
- // tab_type=16；book.download_type 只描述同步/异步交付方式，不能写入 task_type。
- detail.searchParams.set('tab_type',String(DOWNLOAD_TAB));
+ // 批量接口的 task_type 必须与当前内容页 tab_type 保持一致（网文/漫剧/短剧各不相同，取搜索结果返回的 content_tab）。
+ detail.searchParams.set('tab_type',String(ACTIVE_TAB));
  detail.searchParams.set('invite_user_share_token',INVITE);
  detail.searchParams.set('top_tab_genre','-1');detail.searchParams.set('book_id',String(book.book_id));
  detail.searchParams.set('genre',String(book.genre??book.genre_id??205));
- console.log(`内容栏目：红果漫剧（批量接口 task_type=${DOWNLOAD_TAB}）；交付方式由平台响应决定，不改写请求。`);
+ console.log(`内容栏目：${CONTENT_TYPE_LABELS[requestedContentType]||'当前类型'}（批量接口 task_type=${ACTIVE_TAB}）；交付方式由平台响应决定，不改写请求。`);
  const chapterResponseStart=a.length;await c.send('Page.navigate',{url:detail.href});
  if(aliases.length){
    if(aliases.some(x=>!aliasPattern.test(x)))die(`所有关键词必须以“${aliasPrefix}”开头且恰好四个汉字。`,18);
@@ -504,7 +505,7 @@ try{
  const coverUrl=book.thumb_url||book.cover_url||book.book_cover||book.poster_url;
  const coverFile=path.join(COVER_OUTPUT,`${safe(title)}.jpg`);
  if(coverUrl&&!fs.existsSync(coverFile)&&!infoOnly){console.log(`下载封面：${coverFile}`);try{await download(String(coverUrl).replace(/^http:/,'https:'),coverFile)}catch(e){console.error(`封面下载失败：${e.message}`)}}
- const info={title,book_id:String(book.book_id),description:book.book_abstract||book.subabstract||'',captured_at:new Date().toISOString(),cover_available:!!coverUrl,cover_file:fs.existsSync(coverFile)?coverFile:null,chapters:[]};
+ const info={title,book_id:String(book.book_id),content_type:requestedContentType,content_type_label:CONTENT_TYPE_LABELS[requestedContentType]||'',description:book.book_abstract||book.subabstract||'',captured_at:new Date().toISOString(),cover_available:!!coverUrl,cover_file:fs.existsSync(coverFile)?coverFile:null,chapters:[]};
  for(const x of list){const ordinal=info.chapters.length+1,name=String(x.chapter_name||`第${ordinal}集`),u=x.video_download_url||x.video_url||generatedById.get(String(x.item_id||'')),row={index:ordinal,download_order:ordinal,platform_index:x.index??x.chapter_index??null,item_id:x.item_id,chapter_name:name,url_available:!!u};info.chapters.push(row);if(infoOnly)continue;if(!u){console.log(`跳过下载列表第 ${ordinal} 集：平台未开放下载地址`);continue}let ext='.mp4';try{ext=path.extname(new URL(u).pathname)||'.mp4'}catch{}const file=path.join(dir,`${String(ordinal).padStart(3,'0')}_${safe(name)}${ext}`);if(fs.existsSync(file)&&(await fsp.stat(file)).size){console.log(`已存在：${path.basename(file)}`);continue}console.log(`下载：${path.basename(file)}（逻辑第${ordinal}集，平台标签“${name}”）`);try{await download(u,file)}catch(e){row.error=e.message;console.error(`失败：${e.message}`)}}
  const infoDir=path.join(dir,'剧目信息');await fsp.mkdir(infoDir,{recursive:true});const infoFile=path.join(infoDir,'剧目信息.json');await fsp.writeFile(infoFile,JSON.stringify(info,null,2),'utf8');
  console.log(`\n保存位置：${dir}`);const n=info.chapters.filter(x=>x.error).length;if(n)die(`${n} 集失败；再次运行可续传。`,14);

@@ -200,6 +200,23 @@ def main() -> int:
             export_btn = QPushButton("下载到表格")
             export_btn.clicked.connect(self._export_to_table)
             top.addWidget(export_btn)
+            top.addSpacing(12)
+            top.addWidget(QLabel("内容类型："))
+            self.type_combo = QComboBox()
+            self.type_combo.addItems(["漫剧", "网文", "短剧"])
+            self.type_combo.setCurrentIndex(0)
+            self.type_combo.currentIndexChanged.connect(self._on_type_changed)
+            top.addWidget(self.type_combo)
+            top.addWidget(QLabel("集数："))
+            self.episodes_input = QLineEdit()
+            self.episodes_input.setPlaceholderText("可选，同名区分")
+            self.episodes_input.setFixedWidth(84)
+            self.episodes_input.editingFinished.connect(self._on_episodes_changed)
+            top.addWidget(self.episodes_input)
+            ocr_btn = QPushButton("识图添加")
+            ocr_btn.setToolTip("选择剧图，识别图中的剧名/集数/标签后填入上方（可修正），再点「添加任务」")
+            ocr_btn.clicked.connect(self._ocr_add)
+            top.addWidget(ocr_btn)
             layout.addLayout(top)
 
             prefix_row = QHBoxLayout()
@@ -308,6 +325,55 @@ def main() -> int:
             enabled = state == 2  # Qt.Checked
             core.set_manual_mode(enabled)
             self._append_log(f"手动别名模式：{'开启' if enabled else '关闭'}（导入后不自动执行，等手动输入别名）")
+
+        def _on_type_changed(self, index: int) -> None:
+            key = ["manju", "wangwen", "duanju"][index]
+            core.set_content_type(key)
+            self._append_log(f"内容类型：{['漫剧', '网文', '短剧'][index]}（同名时按此标签精确匹配）")
+
+        def _on_episodes_changed(self) -> None:
+            text = self.episodes_input.text().strip()
+            if not text:
+                core.set_expected_episodes(0)
+                return
+            try:
+                core.set_expected_episodes(int(text))
+                self._append_log(f"期望集数：{core.expected_episodes} 集（同名同标签时按此精确区分）")
+            except ValueError:
+                QMessageBox.warning(self, "集数无效", "请输入整数集数")
+
+        def _ocr_add(self) -> None:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "选择剧图（识别剧名/集数/标签）",
+                "", "图片 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)"
+            )
+            if not file_path:
+                return
+            try:
+                self._append_log(f"正在识别图片：{os.path.basename(file_path)}")
+                lines = core.ocr_image(file_path)
+                meta = core.parse_ocr_meta(lines)
+                title = meta["title"]
+                if not title:
+                    QMessageBox.warning(self, "未识别到剧名", "图片中没有识别到文字，请改用 BookID 或剧名手动输入")
+                    return
+                self.book_input.setText(title)
+                if meta["episodes"]:
+                    self.episodes_input.setText(str(meta["episodes"]))
+                    core.set_expected_episodes(meta["episodes"])
+                if meta["content_type"]:
+                    idx = {"manju": 0, "wangwen": 1, "duanju": 2}[meta["content_type"]]
+                    self.type_combo.setCurrentIndex(idx)
+                    core.set_content_type(meta["content_type"])
+                tip = f"识图完成：剧名「{title}」"
+                if meta["episodes"]:
+                    tip += f"，{meta['episodes']} 集"
+                if meta["content_type"]:
+                    tip += f"，类型 {meta['content_type']}"
+                tip += "（识别结果可修改，确认后点「添加任务」）"
+                self._append_log(tip)
+            except Exception as error:  # noqa: BLE001
+                QMessageBox.critical(self, "识图失败", str(error))
 
         def _add_task(self) -> None:
             value = self.book_input.text().strip()
