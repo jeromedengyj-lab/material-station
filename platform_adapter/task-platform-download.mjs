@@ -5,6 +5,7 @@ import os from 'node:os';
 import {spawn} from 'node:child_process';
 import {Readable} from 'node:stream';
 import {finished} from 'node:stream/promises';
+import {matchRejectText, REJECT_MATCH_JS} from './reject-patterns.mjs';
 import {resolveSharedRoot} from './shared-root.mjs';
 
 let ROOT;
@@ -213,8 +214,8 @@ async function submitAlias(c,alias,bookId){
  if(!selected)return {ok:false,reason:'当前可见下拉列表找不到“解说混剪”'};
  let clicked=false;
  for(let i=0;i<40&&!clicked;i++){
-   const formState=await ev(c,`(()=>{let d=${visibleDialog};if(!d)return {dialog:false};let alias=${JSON.stringify('ALIAS')},input=[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名')),submit=[...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='提交'),text=d.innerText||'';let duplicate=/你已申请此别名|已有相同书名存在|别名已存在|该别名已被使用|该别名已被他人申请|已被他人申请|他人已申请|此别名已被|请勿重复申请/.test(text);return {dialog:true,aliasOk:input?.value===alias,typeOk:text.includes('解说混剪'),submitEnabled:!!submit&&!submit.disabled,duplicate}})()`.replace('ALIAS',alias));
-   if(formState.dialog&&formState.duplicate){return {ok:false,reason:{duplicate:true,message:'平台提示该别名已申请过',dialogText:formState.dialogText}}}
+   const formState=await ev(c,`(()=>{let d=${visibleDialog};if(!d)return {dialog:false};let alias=${JSON.stringify('ALIAS')},input=[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名')),submit=[...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='提交'),text=d.innerText||'';let reject=(${REJECT_MATCH_JS})(text);return {dialog:true,aliasOk:input?.value===alias,typeOk:text.includes('解说混剪'),submitEnabled:!!submit&&!submit.disabled,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`.replace('ALIAS',alias));
+   if(formState.dialog&&formState.duplicate){return {ok:false,reason:{duplicate:!/相似|热门|侵权/.test(formState.rejectReason),similarity:/相似|热门|侵权/.test(formState.rejectReason),message:`平台提示拒绝该候选：${formState.rejectReason}`,dialogText:formState.dialogText}}}
    if(formState.dialog&&!formState.aliasOk){
      const focused=await ev(c,`(()=>{let d=${visibleDialog},i=d&&[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名'));if(!i)return false;i.focus();i.select();return document.activeElement===i})()`);
      if(focused)await c.send('Input.insertText',{text:alias});
@@ -229,7 +230,7 @@ async function submitAlias(c,alias,bookId){
  let state;
  for(let i=0;i<32;i++){
    if(await verificationChallenge(c))return {ok:false,blocked:true,reason:'检测到任务台滑块/安全验证，需要人工完成后从当前候选恢复'};
-   try{state=await ev(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),duplicate=/你已申请此别名|已有相同书名存在|别名已存在|该别名已被使用|该别名已被他人申请|已被他人申请|他人已申请|此别名已被/.test(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,duplicate}})()`)}catch{await sleep(250);continue}
+   try{state=await ev(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),reject=(${REJECT_MATCH_JS})(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`)}catch{await sleep(250);continue}
    if(state.duplicate)return {ok:false,reason:state};
    if(state.success||state.messages.some(x=>/别名创建成功|已提交|审核中/.test(x))){try{await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||'').includes('别名创建成功')}),b=d?.querySelector('svg[class*=close],[class*=close]');if(!b)return false;b.click();return true})()`)}catch{}await sleep(150);return {ok:true,state}}
    await sleep(250);
