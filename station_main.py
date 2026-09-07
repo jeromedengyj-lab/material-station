@@ -373,6 +373,8 @@ def main() -> int:
                         tip += f"，{meta['episodes']} 集"
                     if meta["content_type"]:
                         tip += f"，类型 {meta['content_type']}"
+                    if meta.get("tags"):
+                        tip += f"，标签 {'/'.join(meta['tags'])}"
                     tip += "（识别结果可修改，确认后点「添加任务」）"
                     self._append_log(tip)
                 except Exception as error:  # noqa: BLE001

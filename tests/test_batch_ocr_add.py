@@ -74,6 +74,27 @@ def test_ocr_quality_rejects_garbage(core: StationCore) -> None:
     assert core._ocr_text_quality(good) > 0.6
 
 
+def test_parse_ocr_meta_state_tags(core: StationCore) -> None:
+    """状态标签提取：完整词 + OCR 短行模糊还原（"新0"/"新囗"→"新剧"）。"""
+    lines = [
+        _ocr_line("新0", 1),          # "新剧"红标被 OCR 误读
+        _ocr_line("热剧", 2),
+        _ocr_line("天桥乞讨，我拉二胡成顶流是首富", 3),
+    ]
+    meta = core.parse_ocr_meta(lines)
+    assert "新剧" in meta["tags"]
+    assert "热剧" in meta["tags"]
+    assert "天桥乞讨" in meta["title"]
+
+
+def test_parse_ocr_meta_tags_not_false_positive(core: StationCore) -> None:
+    """长行不做模糊还原，避免剧名中的"新"字误报为"新剧"。"""
+    lines = [_ocr_line("新的开始之天桥乞讨，我拉二胡成顶流是首富", 1)]
+    meta = core.parse_ocr_meta(lines)
+    assert "新剧" not in meta["tags"]
+    assert "新" in meta["title"]
+
+
 def test_add_tasks_from_images_batch(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
     """批量识图：识别出的任务自动添加（剧名+集数+类型），低质量图片跳过。"""
     ocr_results = {

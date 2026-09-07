@@ -808,6 +808,10 @@ class StationCore:
     )
     # 剧名行首尾的播放器/弹窗装饰符号
     _OCR_TITLE_TRIM = "〈〉《》「」『』〔〕【】|│·•|｜　\"\"''（）()[]~～—-_.,，。!！?？:：;；"
+    # 平台状态标签（完整词匹配）
+    _OCR_STATE_TAGS = ("新剧", "热剧", "独播", "完结", "限免", "会员", "爆款", "推荐")
+    # OCR 对"剧"字的常见误读（0/O/囗/口/固/目），短行（≤3字）按此模糊还原
+    _OCR_TAG_FUZZY = {0: "剧", "O": "剧", "囗": "剧", "口": "剧", "固": "剧", "目": "剧", "0": "剧"}
 
     @staticmethod
     def _ocr_text_quality(text: str) -> float:
@@ -820,20 +824,36 @@ class StationCore:
 
     @classmethod
     def parse_ocr_meta(cls, lines: list[dict]) -> dict:
-        """从 OCR 行提取 {title, episodes, content_type}。
+        """从 OCR 行提取 {title, episodes, content_type, tags}。
 
         - content_type：精确词 网文/漫剧/短剧
+        - tags：平台状态标签（新剧/热剧/独播/完结/限免/会员…），含 OCR 短行模糊还原
+          （"新0"/"新囗" → 新剧）
         - episodes：正则 `(\d{1,4})\s*集` / `第(\d+)集`
         - title：过滤播放页 UI 噪声行后取最长行，并清理首尾装饰符号；
           全部被过滤（如纯 UI 截图）时回退原始最长行，允许 UI 修正
         """
         texts = [str(x.get("text", "") or "").strip() for x in lines if str(x.get("text", "") or "").strip()]
-        meta: dict = {"title": "", "episodes": 0, "content_type": ""}
+        meta: dict = {"title": "", "episodes": 0, "content_type": "", "tags": []}
         for text in texts:
             for key, label in (("manju", "漫剧"), ("wangwen", "网文"), ("duanju", "短剧")):
                 if label in text:
                     meta["content_type"] = key
                     break
+        # 状态标签：完整词 + 短行模糊还原（"新0"→"新剧"）
+        tags: list[str] = []
+        for text in texts:
+            for tag in cls._OCR_STATE_TAGS:
+                if tag in text and tag not in tags:
+                    tags.append(tag)
+        for text in texts:
+            if len(text) > 3:
+                continue
+            fixed = "".join(cls._OCR_TAG_FUZZY.get(ch, ch) for ch in text)
+            for tag in ("新剧", "热剧", "独播", "完结"):
+                if fixed == tag and tag not in tags:
+                    tags.append(tag)
+        meta["tags"] = tags
         # 集数：优先「全 N 集」全集数；次选 N 集（排除「第 N 集」当前集）；取最大值
         episode_values: list[int] = []
         for text in texts:
@@ -881,7 +901,14 @@ class StationCore:
                     task.expected_episodes = meta["episodes"]
                 if meta["content_type"]:
                     task.content_type = meta["content_type"]
-                task.detail = f"识图添加：{title}（{meta['episodes']}集）" if meta["episodes"] else f"识图添加：{title}"
+                parts = [title]
+                if meta["episodes"]:
+                    parts.append(f"{meta['episodes']}集")
+                if meta["content_type"]:
+                    parts.append(meta["content_type"])
+                if meta.get("tags"):
+                    parts.append("/".join(meta["tags"]))
+                task.detail = "识图添加：" + "，".join(parts)
                 self._save_state()
                 added.append((title, meta))
             except ValueError as error:  # 已在任务列表等
