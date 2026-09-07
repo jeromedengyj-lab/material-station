@@ -801,13 +801,31 @@ class StationCore:
             raise RuntimeError(str(payload.get("message") or "识图失败"))
         return payload.get("lines") or []
 
+    # 播放页截图 UI 噪声词：这些行是播放器控件/剧情描述，不是剧名
+    _OCR_NOISE_MARKERS = (
+        "第", "集", "选集", "全屏", "分享", "作者声明", "倍速", "免费观看",
+        "展开", "返回", "弹幕", "评论", "转发", "缓存", "关注", "内容由",
+    )
+    # 剧名行首尾的播放器/弹窗装饰符号
+    _OCR_TITLE_TRIM = "〈〉《》「」『』〔〕【】|│·•|｜　\"\"''（）()[]~～—-_.,，。!！?？:：;；"
+
     @staticmethod
-    def parse_ocr_meta(lines: list[dict]) -> dict:
+    def _ocr_text_quality(text: str) -> float:
+        """估算 OCR 文本质量：正常中文字符占比（0~1）。乱码（●●½ż◆ 类）占比极低。"""
+        text = str(text or "")
+        if not text:
+            return 0.0
+        normal = len(re.findall(r"[\u4e00-\u9fff，。！？、：；「」『』【】《》（）0-9a-zA-Z]", text))
+        return normal / len(text)
+
+    @classmethod
+    def parse_ocr_meta(cls, lines: list[dict]) -> dict:
         """从 OCR 行提取 {title, episodes, content_type}。
 
-        - content_type：优先精确词 网文/漫剧/短剧（可被「剧名包含同词」干扰时取首次出现）
-        - episodes：正则 `(\d{1,4})\s*集` / `第(\d+)集`，识别不出返回 0
-        - title：取最长非空行（海报标题通常是最大最完整的文字），允许 UI 修正
+        - content_type：精确词 网文/漫剧/短剧
+        - episodes：正则 `(\d{1,4})\s*集` / `第(\d+)集`
+        - title：过滤播放页 UI 噪声行后取最长行，并清理首尾装饰符号；
+          全部被过滤（如纯 UI 截图）时回退原始最长行，允许 UI 修正
         """
         texts = [str(x.get("text", "") or "").strip() for x in lines if str(x.get("text", "") or "").strip()]
         meta: dict = {"title": "", "episodes": 0, "content_type": ""}
@@ -816,13 +834,61 @@ class StationCore:
                 if label in text:
                     meta["content_type"] = key
                     break
-            if not meta["episodes"]:
-                m = re.search(r"(\d{1,4})\s*集", text) or re.search(r"第\s*(\d{1,4})\s*集", text)
-                if m:
-                    meta["episodes"] = int(m.group(1))
-        if texts:
-            meta["title"] = max(texts, key=len)
+        # 集数：优先「全 N 集」全集数；次选 N 集（排除「第 N 集」当前集）；取最大值
+        episode_values: list[int] = []
+        for text in texts:
+            for m in re.finditer(r"(\d{1,4})\s*集", text):
+                num = int(m.group(1))
+                before = text[max(0, m.start() - 2):m.start()]
+                if "第" in before:
+                    continue  # 「第 N 集」是当前集，不是总集数
+                episode_values.append(num)
+        if episode_values:
+            meta["episodes"] = max(episode_values)
+        if not texts:
+            return meta
+        clean = [t.strip().strip(cls._OCR_TITLE_TRIM).strip() for t in texts]
+        clean = [t for t in clean if t]
+        candidates = [t for t in clean if not any(n in t for n in cls._OCR_NOISE_MARKERS)]
+        pool = candidates or clean
+        best = max(pool, key=lambda t: (len(t), len(re.findall(r"[\u4e00-\u9fff]", t))))
+        # OCR 会在汉字之间插入空格（"沂 居 天 桥"），去掉中文-中文之间的空白；英文词间空格保留
+        best = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", best)
+        meta["title"] = best
         return meta
+
+    def add_tasks_from_images(self, image_paths: list[str | Path]) -> dict:
+        """批量识图添加任务：逐张 OCR → 提取剧名/集数/标签 → 创建任务。
+
+        - 识别不出剧名 / 乱码低质量 / 已在任务列表 的图片计入 skipped（不中断整批）
+        - 集数/类型以识别结果为准（覆盖全局配置），识别不到则用全局默认
+        - 返回 {"added": [(剧名, meta)], "skipped": [(图片, 原因)]}
+        """
+        added: list[tuple[str, dict]] = []
+        skipped: list[tuple[str, str]] = []
+        for raw in image_paths:
+            image = Path(raw)
+            label = str(image)
+            try:
+                lines = self.ocr_image(image)
+                meta = self.parse_ocr_meta(lines)
+                title = str(meta["title"] or "").strip()
+                if not title or self._ocr_text_quality(title) < 0.45:
+                    skipped.append((label, "未识别出有效剧名（图片文字不清晰或为乱码）"))
+                    continue
+                task = self.add_task(title)
+                if meta["episodes"]:
+                    task.expected_episodes = meta["episodes"]
+                if meta["content_type"]:
+                    task.content_type = meta["content_type"]
+                task.detail = f"识图添加：{title}（{meta['episodes']}集）" if meta["episodes"] else f"识图添加：{title}"
+                self._save_state()
+                added.append((title, meta))
+            except ValueError as error:  # 已在任务列表等
+                skipped.append((label, str(error)))
+            except Exception as error:  # noqa: BLE001
+                skipped.append((label, str(error)))
+        return {"added": added, "skipped": skipped}
         self._save_state()
 
     def set_fix_affix(self, enabled: bool) -> None:

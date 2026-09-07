@@ -4,6 +4,9 @@
 param([string]$ImagePath)
 
 $ErrorActionPreference = 'Stop'
+# 强制 UTF-8 输出：Windows PowerShell 5.1 默认按 GBK 输出中文，Python 按 utf-8 解码会得到乱码
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]

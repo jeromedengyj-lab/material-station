@@ -111,14 +111,15 @@ def test_download_defaults_to_manju(core: StationCore, monkeypatch: pytest.Monke
 
 
 def test_parse_ocr_meta_extracts_all(core: StationCore) -> None:
-    """识图解析：剧名（最长行）+ 集数（68集）+ 标签（漫剧）。"""
+    """识图解析：剧名（最长行）+ 集数（68集）+ 标签（漫剧）；OCR 中文间空格被清理。"""
     lines = [
         {"line": 1, "text": "破 译 起 手 从 卡 bug 到 诸 天 禁 忌"},
         {"line": 2, "text": "漫剧"},
         {"line": 3, "text": "剧情·68集"},
     ]
     meta = core.parse_ocr_meta(lines)
-    assert meta["title"] == "破 译 起 手 从 卡 bug 到 诸 天 禁 忌"
+    # 中文间空格被清理；英文词间空格保留（mjs 搜索归一化会去掉全部空白，不影响匹配）
+    assert meta["title"] == "破译起手从卡 bug 到诸天禁忌"
     assert meta["episodes"] == 68
     assert meta["content_type"] == "manju"
 

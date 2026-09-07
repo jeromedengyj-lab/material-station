@@ -343,37 +343,63 @@ def main() -> int:
                 QMessageBox.warning(self, "集数无效", "请输入整数集数")
 
         def _ocr_add(self) -> None:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "选择剧图（识别剧名/集数/标签）",
+            file_paths, _ = QFileDialog.getOpenFileNames(
+                self, "选择剧图（支持多选批量识别添加）",
                 "", "图片 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)"
             )
-            if not file_path:
+            if not file_paths:
                 return
+            # 单张：回填到输入框供确认/修正后手动添加
+            if len(file_paths) == 1:
+                file_path = file_paths[0]
+                try:
+                    self._append_log(f"正在识别图片：{os.path.basename(file_path)}")
+                    lines = core.ocr_image(file_path)
+                    meta = core.parse_ocr_meta(lines)
+                    title = meta["title"]
+                    if not title or core._ocr_text_quality(title) < 0.45:
+                        QMessageBox.warning(self, "未识别到有效剧名", "图片文字不清晰或为乱码，请改用 BookID 或剧名手动输入")
+                        return
+                    self.book_input.setText(title)
+                    if meta["episodes"]:
+                        self.episodes_input.setText(str(meta["episodes"]))
+                        core.set_expected_episodes(meta["episodes"])
+                    if meta["content_type"]:
+                        idx = {"manju": 0, "wangwen": 1, "duanju": 2}[meta["content_type"]]
+                        self.type_combo.setCurrentIndex(idx)
+                        core.set_content_type(meta["content_type"])
+                    tip = f"识图完成：剧名「{title}」"
+                    if meta["episodes"]:
+                        tip += f"，{meta['episodes']} 集"
+                    if meta["content_type"]:
+                        tip += f"，类型 {meta['content_type']}"
+                    tip += "（识别结果可修改，确认后点「添加任务」）"
+                    self._append_log(tip)
+                except Exception as error:  # noqa: BLE001
+                    QMessageBox.critical(self, "识图失败", str(error))
+                return
+            # 多张：逐个识别并直接批量添加任务（识别不出/乱码/重复的跳过并汇报）
+            self._append_log(f"批量识图开始：共 {len(file_paths)} 张")
             try:
-                self._append_log(f"正在识别图片：{os.path.basename(file_path)}")
-                lines = core.ocr_image(file_path)
-                meta = core.parse_ocr_meta(lines)
-                title = meta["title"]
-                if not title:
-                    QMessageBox.warning(self, "未识别到剧名", "图片中没有识别到文字，请改用 BookID 或剧名手动输入")
-                    return
-                self.book_input.setText(title)
-                if meta["episodes"]:
-                    self.episodes_input.setText(str(meta["episodes"]))
-                    core.set_expected_episodes(meta["episodes"])
-                if meta["content_type"]:
-                    idx = {"manju": 0, "wangwen": 1, "duanju": 2}[meta["content_type"]]
-                    self.type_combo.setCurrentIndex(idx)
-                    core.set_content_type(meta["content_type"])
-                tip = f"识图完成：剧名「{title}」"
-                if meta["episodes"]:
-                    tip += f"，{meta['episodes']} 集"
-                if meta["content_type"]:
-                    tip += f"，类型 {meta['content_type']}"
-                tip += "（识别结果可修改，确认后点「添加任务」）"
-                self._append_log(tip)
+                result = core.add_tasks_from_images(file_paths)
             except Exception as error:  # noqa: BLE001
-                QMessageBox.critical(self, "识图失败", str(error))
+                QMessageBox.critical(self, "批量识图失败", str(error))
+                return
+            for title, meta in result["added"]:
+                tip = f"  已添加：{title}"
+                if meta.get("episodes"):
+                    tip += f"（{meta['episodes']}集）"
+                if meta.get("content_type"):
+                    tip += f"（{meta['content_type']}）"
+                self._append_log(tip)
+            for label, reason in result["skipped"]:
+                self._append_log(f"  跳过：{os.path.basename(str(label))} → {reason}")
+            self._append_log(f"批量识图完成：成功 {len(result['added'])} 张，跳过 {len(result['skipped'])} 张")
+            self._refresh_tasks()
+            QMessageBox.information(
+                self, "批量识图结果",
+                f"成功添加：{len(result['added'])} 张\n跳过：{len(result['skipped'])} 张\n\n跳过明细见日志"
+            )
 
         def _add_task(self) -> None:
             value = self.book_input.text().strip()
