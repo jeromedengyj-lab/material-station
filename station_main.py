@@ -204,7 +204,8 @@ def main() -> int:
             top.addWidget(QLabel("内容类型："))
             self.type_combo = QComboBox()
             self.type_combo.addItems(["不限", "漫剧", "网文", "短剧"])
-            self.type_combo.setCurrentIndex(0)
+            # 记住上次选择：按持久化的全局 content_type 恢复下拉（不硬编码回"不限"）
+            self.type_combo.setCurrentIndex({"manju": 1, "wangwen": 2, "duanju": 3}.get(core.content_type, 0))
             self.type_combo.currentIndexChanged.connect(self._on_type_changed)
             top.addWidget(self.type_combo)
             top.addWidget(QLabel("集数："))
@@ -212,6 +213,8 @@ def main() -> int:
             self.episodes_input.setPlaceholderText("可选，同名区分")
             self.episodes_input.setFixedWidth(84)
             self.episodes_input.editingFinished.connect(self._on_episodes_changed)
+            if core.expected_episodes > 0:
+                self.episodes_input.setText(str(core.expected_episodes))
             top.addWidget(self.episodes_input)
             ocr_btn = QPushButton("识图添加")
             ocr_btn.setToolTip("选择剧图，识别图中的剧名/集数/标签后填入上方（可修正），再点「添加任务」")
