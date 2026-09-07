@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sys
 import time
@@ -19,19 +20,67 @@ from pathlib import Path
 
 STATION_VERSION = "v1.0"
 
+# 候选别名的申请结果 → 表格展示文案
+_ALIAS_RESULT_LABELS = {
+    "approved": "成功",
+    "rejected": "失败-被拒",
+    "global_duplicate": "失败-重复",
+    "failed": "失败",
+    "waiting_manual_verification": "待人工核验",
+    "waiting_review": "待审核",
+    "waiting_retry": "待重试",
+    "running": "进行中",
+    "queued": "未申请",
+}
+
+
+def alias_summary(task_file: str | Path | None) -> tuple[str, str]:
+    """从三端别名任务.json 汇总每个候选别名的申请结果。
+
+    返回 (采用的别名, 候选结果摘要)。摘要按候选顺序列出，如：
+      "知夏断案=成功；知夏守名=失败；知夏拒婚=失败"
+    文件缺失或无法解析时返回 ("", "（任务文件缺失）")。
+    """
+    if not task_file:
+        return "", ""
+    try:
+        data = json.loads(Path(task_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "", "（任务文件缺失）"
+    if not isinstance(data, dict):
+        return "", "（任务文件无效）"
+    approved = str(data.get("approved_alias") or "").strip()
+    rows = data.get("candidate_rows")
+    if isinstance(rows, list) and rows:
+        parts = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            alias = str(row.get("alias") or "").strip()
+            status = str(row.get("status") or "")
+            label = _ALIAS_RESULT_LABELS.get(status, status or "未知")
+            parts.append(f"{alias}={label}")
+        return approved, "；".join(parts)
+    candidates = data.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        parts = [f"{str(x).strip()}=未申请" for x in candidates if str(x).strip()]
+        return approved, "；".join(parts)
+    return approved, ""
+
 
 def export_tasks_to_csv(tasks: list, path: str | Path) -> int:
     """把任务列表导出为 CSV（UTF-8 BOM，Excel 可直接打开，中文不乱码）。
 
     只读导出：不修改任何任务状态，不清除界面信息。
-    tasks: 每项含 input_value / book_id / title / status_text / detail / updated_at。
+    tasks: 每项含 input_value / book_id / title / status_text / detail /
+           alias（采用的别名）/ alias_result（候选别名申请结果摘要）。
     返回导出的行数。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["序号", "输入", "剧名", "状态", "详情", "时间"])
+        writer.writerow(["序号", "输入", "剧名", "状态", "详情", "别名", "别名结果", "时间"])
         for row, task in enumerate(tasks, start=1):
             display_input = str(task.get("input_value") or task.get("book_id") or "")
             writer.writerow([
@@ -40,6 +89,8 @@ def export_tasks_to_csv(tasks: list, path: str | Path) -> int:
                 task.get("title") or "-",
                 task.get("status_text") or task.get("status") or "",
                 task.get("detail") or "",
+                task.get("alias") or "",
+                task.get("alias_result") or "",
                 task.get("time_text") or "",
             ])
     return len(tasks)
@@ -362,10 +413,17 @@ def main() -> int:
                     "title": task.title or "",
                     "status_text": self._STATUS_TEXT.get(task.status, task.status),
                     "detail": task.detail or "",
+                    "alias": "",
+                    "alias_result": "",
                     "time_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(task.updated_at)),
                 }
                 for task in tasks
             ]
+            # 从每个任务的三端别名任务.json 汇总候选别名申请结果
+            for task, row in zip(tasks, rows):
+                approved, summary = alias_summary(task.task_file if task.task_file else None)
+                row["alias"] = approved or (task.approved_alias or "")
+                row["alias_result"] = summary
             try:
                 count = export_tasks_to_csv(rows, file_path)
             except Exception as error:  # noqa: BLE001
