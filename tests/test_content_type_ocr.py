@@ -69,20 +69,29 @@ def test_set_expected_episodes_invalid(core: StationCore) -> None:
         core.set_expected_episodes("abc")
 
 
-def test_add_task_inherits_global_config(core: StationCore) -> None:
-    """添加任务时继承当前全局类型与集数（UI 设置后添加生效）。"""
+def test_add_task_not_inherits_global(core: StationCore) -> None:
+    """任务不继承全局配置（回归：识图回填的漫剧/120集不再污染后续 txt 任务）。"""
     core.set_content_type("manju")
     core.set_expected_episodes(115)
     task = core.add_book_id(BOOK_ID)
+    assert task.content_type == ""
+    assert task.expected_episodes == 0
+
+
+def test_add_task_with_task_level_config(core: StationCore) -> None:
+    """显式传入任务级类型/集数：只作用于该任务。"""
+    task = core.add_book_id(BOOK_ID, content_type="manju", expected_episodes=115)
     assert task.content_type == "manju"
     assert task.expected_episodes == 115
+    # 另一个不传的任务不受影响
+    task2 = core.add_task("另一部剧")
+    assert task2.content_type == ""
+    assert task2.expected_episodes == 0
 
 
 def test_download_passes_type_and_episodes(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_download 向 mjs 透传 --content-type 与 --expected-episodes。"""
-    core.set_content_type("manju")
-    core.set_expected_episodes(115)
-    task = core.add_book_id(BOOK_ID)
+    """_download 向 mjs 透传任务级 --content-type 与 --expected-episodes。"""
+    task = core.add_book_id(BOOK_ID, content_type="manju", expected_episodes=115)
     captured: dict = {}
     monkeypatch.setattr(
         core, "_run_process",

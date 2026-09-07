@@ -363,11 +363,9 @@ def main() -> int:
                     self.book_input.setText(title)
                     if meta["episodes"]:
                         self.episodes_input.setText(str(meta["episodes"]))
-                        core.set_expected_episodes(meta["episodes"])
                     if meta["content_type"]:
                         idx = {"manju": 1, "wangwen": 2, "duanju": 3}[meta["content_type"]]
                         self.type_combo.setCurrentIndex(idx)
-                        core.set_content_type(meta["content_type"])
                     tip = f"识图完成：剧名「{title}」"
                     if meta["episodes"]:
                         tip += f"，{meta['episodes']} 集"
@@ -408,10 +406,19 @@ def main() -> int:
             if not value:
                 return
             try:
-                task = core.add_task(value)
+                # 当前下拉/输入框的值应用到【本次添加的任务】（任务级，不写死全局）
+                type_key = ["", "manju", "wangwen", "duanju"][self.type_combo.currentIndex()]
+                episodes_text = self.episodes_input.text().strip()
+                episodes = int(episodes_text) if episodes_text else None
+                task = core.add_task(value, content_type=type_key, expected_episodes=episodes)
                 self.book_input.clear()
                 label = f"BookID {task.input_value}" if task.input_type == "book_id" else f"剧名「{task.input_value}」"
-                self._append_log(f"已添加 {label}")
+                extra = []
+                if task.content_type:
+                    extra.append({"manju": "漫剧", "wangwen": "网文", "duanju": "短剧"}.get(task.content_type, task.content_type))
+                if task.expected_episodes:
+                    extra.append(f"{task.expected_episodes}集")
+                self._append_log(f"已添加 {label}" + (f"（{'、'.join(extra)}）" if extra else ""))
                 self._refresh_tasks()
             except ValueError as error:
                 QMessageBox.warning(self, "无法添加", str(error))

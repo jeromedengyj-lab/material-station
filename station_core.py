@@ -370,7 +370,9 @@ class StationCore:
         ordered.sort(key=lambda t: t.created_at)
         return ordered
 
-    def add_book_id(self, book_id: str) -> StationTask:
+    def add_book_id(self, book_id: str, content_type: str | None = None,
+                    expected_episodes: int | None = None) -> StationTask:
+        """添加 BookID 任务（直达定位不依赖类型/集数；传入时仅作记录）。"""
         book_id = str(book_id or "").strip()
         if not _is_book_id(book_id):
             raise ValueError("BookID 必须是 16~20 位纯数字")
@@ -378,14 +380,14 @@ class StationCore:
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"BookID {book_id} 已在任务列表中")
         task = StationTask(book_id=book_id, input_type="book_id", input_value=book_id)
-        task.content_type = self.content_type
-        task.expected_episodes = self.expected_episodes
+        task.content_type = str(content_type or "").strip()
+        task.expected_episodes = max(0, int(expected_episodes or 0))
         if existing:
             # 重新入队：清空旧进度，保留标题便于展示
             task.title = existing.title
             task.resolved_book_id = existing.resolved_book_id or book_id
-            task.content_type = self.content_type or existing.content_type
-            task.expected_episodes = self.expected_episodes or existing.expected_episodes
+            task.content_type = task.content_type or existing.content_type
+            task.expected_episodes = task.expected_episodes or existing.expected_episodes
         self._tasks[book_id] = task
         if self.manual_mode:
             task.status = STATUS_PENDING_MANUAL
@@ -399,15 +401,18 @@ class StationCore:
         self._emit(book_id, task.status, "已加入队列")
         return task
 
-    def add_task(self, identifier: str, alias_key: str = "") -> StationTask:
+    def add_task(self, identifier: str, alias_key: str = "", content_type: str | None = None,
+                 expected_episodes: int | None = None) -> StationTask:
         """统一入口：自动判断输入是 BookID（16~20位纯数字）还是剧名。
         alias_key：剧名模式下，每行一个别名时用 剧名:别名 作为独立任务key；
-                   同一行多个别名时不传 alias_key，用 剧名 作为key，多个别名作为候选。"""
+                   同一行多个别名时不传 alias_key，用 剧名 作为key，多个别名作为候选。
+        content_type/expected_episodes：任务级精确定位参数（识图/UI 显式传入），
+                   不传=None = 该任务不限制（标签与集数只是同名难区分时的辅助，不写死全局）。"""
         identifier = str(identifier or "").strip()
         if not identifier:
             raise ValueError("请输入 BookID 或剧名")
         if _is_book_id(identifier):
-            return self.add_book_id(identifier)
+            return self.add_book_id(identifier, content_type=content_type, expected_episodes=expected_episodes)
         # 剧名模式
         if len(identifier) > 100:
             raise ValueError("剧名过长（最多 100 字）")
@@ -417,13 +422,13 @@ class StationCore:
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"剧名「{identifier}」已在任务列表中")
         task = StationTask(book_id=task_key, input_type="title", input_value=identifier)
-        task.content_type = self.content_type
-        task.expected_episodes = self.expected_episodes
+        task.content_type = str(content_type or "").strip()
+        task.expected_episodes = max(0, int(expected_episodes or 0))
         if existing:
             task.title = existing.title
             task.resolved_book_id = existing.resolved_book_id
-            task.content_type = self.content_type or existing.content_type
-            task.expected_episodes = self.expected_episodes or existing.expected_episodes
+            task.content_type = task.content_type or existing.content_type
+            task.expected_episodes = task.expected_episodes or existing.expected_episodes
         self._tasks[task_key] = task
         if self.manual_mode:
             task.status = STATUS_PENDING_MANUAL
@@ -829,7 +834,7 @@ class StationCore:
         - content_type：精确词 网文/漫剧/短剧
         - tags：平台状态标签（新剧/热剧/独播/完结/限免/会员…），含 OCR 短行模糊还原
           （"新0"/"新囗" → 新剧）
-        - episodes：正则 `(\d{1,4})\s*集` / `第(\d+)集`
+        - episodes：正则 `(\\d{1,4})\\s*集` / `第(\\d+)集`
         - title：过滤播放页 UI 噪声行后取最长行，并清理首尾装饰符号；
           全部被过滤（如纯 UI 截图）时回退原始最长行，允许 UI 修正
         """
@@ -1110,7 +1115,7 @@ class StationCore:
         adapter = self._adapter("task-platform-download.mjs")
         log_path = self._log_file(task, "download")
         extra_args = ["--info-only"] if info_only else []
-        content_type = (task.content_type or self.content_type or "").strip()
+        content_type = (task.content_type or "").strip()
         if task.expected_episodes > 0:
             extra_args = [*extra_args, "--expected-episodes", str(task.expected_episodes)]
         if task.input_type == "title":
