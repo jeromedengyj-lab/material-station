@@ -38,8 +38,8 @@ def core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StationCore:
     return value
 
 
-def _ocr_line(text: str, line: int = 1) -> dict:
-    return {"line": line, "text": text, "words": []}
+def _ocr_line(text: str, line: int = 1, words: list | None = None) -> dict:
+    return {"line": line, "text": text, "words": [{"text": w, "conf": 0} for w in words] if words else []}
 
 
 def test_parse_ocr_meta_picks_title_not_description(core: StationCore) -> None:
@@ -93,6 +93,25 @@ def test_parse_ocr_meta_tags_not_false_positive(core: StationCore) -> None:
     meta = core.parse_ocr_meta(lines)
     assert "新剧" not in meta["tags"]
     assert "新" in meta["title"]
+
+
+def test_parse_ocr_meta_strips_leading_tag(core: StationCore) -> None:
+    """绿色过滤后「新剧」角标与剧名连成一行，OCR 独立词「新剧」在开头 → 剧名去掉标签词。"""
+    lines = [
+        _ocr_line("新剧天桥乞讨，我靠拉二胡成顶流是首富", 1, words=["新剧", "天桥乞讨，我靠拉二胡成顶流是首富"]),
+        _ocr_line("选集·全120集·免费观看", 2),
+    ]
+    meta = core.parse_ocr_meta(lines)
+    assert meta["title"] == "天桥乞讨，我靠拉二胡成顶流是首富"
+    assert "新剧" in meta["tags"]
+    assert meta["episodes"] == 120
+
+
+def test_parse_ocr_meta_keeps_tag_in_real_title(core: StationCore) -> None:
+    """剧名本身包含标签词时（如「新剧情」），OCR 无独立标签词 → 不误删。"""
+    lines = [_ocr_line("新剧情缘之天桥乞讨", 1, words=["新剧情缘之天桥乞讨"])]
+    meta = core.parse_ocr_meta(lines)
+    assert meta["title"] == "新剧情缘之天桥乞讨"
 
 
 def test_add_tasks_from_images_batch(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -874,6 +874,23 @@ class StationCore:
         best = max(pool, key=lambda t: (len(t), len(re.findall(r"[\u4e00-\u9fff]", t))))
         # OCR 会在汉字之间插入空格（"沂 居 天 桥"），去掉中文-中文之间的空白；英文词间空格保留
         best = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", best)
+        # 绿色过滤后角标与剧名连行（"新剧天桥乞讨…"）：OCR 独立词命中的标签词在开头 → 移除
+        leading_tags = set()
+        for x in lines:
+            for w in x.get("words", []):
+                wt = str(w.get("text", "") or "").strip()
+                if wt in cls._OCR_STATE_TAGS:
+                    leading_tags.add(wt)
+        for tag in sorted(leading_tags, key=len, reverse=True):
+            if best.startswith(tag) and (len(best) - len(tag)) >= 4:
+                best = best[len(tag):]
+                break
+        else:
+            # 兜底：OCR 未分独立词时，若开头标签词且剩余仍 ≥8 字（足够长的剧名），保守移除
+            for tag in cls._OCR_STATE_TAGS:
+                if best.startswith(tag) and (len(best) - len(tag)) >= 8:
+                    best = best[len(tag):]
+                    break
         meta["title"] = best
         return meta
 

@@ -10,6 +10,33 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
+# 编译 C# 快速绿色过滤（LockBits 字节级，252万像素约 0.3s，GetPixel 需 30s+）
+Add-Type -ReferencedAssemblies System.Drawing @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+public static class GreenFilterUtil {
+  public static Bitmap Filter(Bitmap src) {
+    Bitmap bmp = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
+    using (Graphics g = Graphics.FromImage(bmp)) { g.DrawImage(src, 0, 0, src.Width, src.Height); }
+    Rectangle rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+    BitmapData data = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+    try {
+      int bytes = Math.Abs(data.Stride) * data.Height;
+      byte[] buf = new byte[bytes];
+      Marshal.Copy(data.Scan0, buf, 0, bytes);
+      // BGRA 字节序：i=B, i+1=G, i+2=R
+      for (int i = 0; i < buf.Length; i += 4) {
+        byte b = buf[i], g = buf[i + 1], r = buf[i + 2];
+        if (g > r + 25 && g > b + 25 && g > 80) { buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; }
+      }
+      Marshal.Copy(buf, 0, data.Scan0, bytes);
+    } finally { bmp.UnlockBits(data); }
+    return bmp;
+  }
+}
+'@
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
 $null = [Windows.Storage.StorageFile, Windows.Foundation, ContentType=WindowsRuntime]
@@ -102,27 +129,34 @@ try {
     exit 1
   }
 
-  # 1) 原图 OCR
-  $allLines = @(Ocr-SoftwareBitmap $engine $origBitmap)
-  $scales = @('original')
-
-  # 2) 2x 整图 OCR（提高中等文字识别率）
+  # 1) 绿色过滤图 OCR（主）——播放器绿色 UI（进度条/按钮/特效）是文字误读主因，
+  #    实测 145300.jpg 过滤后「天桥」不再误读为「济居」且「新剧」红标完整识别
   $drawing = New-Object System.Drawing.Bitmap($abs)
+  $cleanDrawing = [GreenFilterUtil]::Filter($drawing)
+  $cleanSb = Get-SoftwareBitmapFromDrawing $cleanDrawing
+  $allLines = @(Ocr-SoftwareBitmap $engine $cleanSb)
+  $scales = @('green-filtered')
+
+  # 2) 原图 OCR（补充：被过滤掉的绿色文字等）
+  $allLines += @(Ocr-SoftwareBitmap $engine $origBitmap)
+  $scales += @('original')
+
   if ($drawing.Width -gt 200) {
-    $zoom2 = Resize-Drawing $drawing 2.0
+    # 3) 2x 整图 OCR（基于过滤图）
+    $zoom2 = Resize-Drawing $cleanDrawing 2.0
     $sb2 = Get-SoftwareBitmapFromDrawing $zoom2
     $allLines += @(Ocr-SoftwareBitmap $engine $sb2)
     $scales += @('zoom2x')
     $zoom2.Dispose()
 
-    # 3) 左右边缘窄条裁剪 8x 放大（覆盖角落小标签/红标：新剧、热剧、漫剧角标等）
-    #    仅对低矮小图执行（搜索结果卡片/封面角标场景；大截图文字大，原图+2x 已足够）
+    # 4) 左右边缘窄条裁剪 8x 放大（覆盖角落小标签/红标：新剧、热剧、漫剧角标等）
+    #    仅对低矮小图执行（搜索结果卡片/封面角标场景；大截图文字大，过滤图+2x 已足够）
     if ($drawing.Height -le 700) {
       [int]$stripW = [math]::Max(20, [int]($drawing.Width * 0.18))
       foreach ($side in @('left', 'right')) {
         [int]$left = 0
         if ($side -eq 'right') { $left = $drawing.Width - $stripW }
-        $strip = Crop-Drawing $drawing $left 0 $stripW $drawing.Height 8.0
+        $strip = Crop-Drawing $cleanDrawing $left 0 $stripW $drawing.Height 8.0
         $sb = Get-SoftwareBitmapFromDrawing $strip
         $allLines += @(Ocr-SoftwareBitmap $engine $sb)
         $scales += @("strip-$side")
@@ -130,7 +164,7 @@ try {
       }
     }
 
-    # 4) 四角裁剪放大（覆盖角落小标签：新剧/热剧/完结/独播等红标）
+    # 5) 四角裁剪放大（覆盖角落小标签：新剧/热剧/完结/独播等红标）
     $cw = [int]($drawing.Width * 0.45)
     $ch = [int]($drawing.Height * 0.45)
     $corners = @(
@@ -140,7 +174,7 @@ try {
       @{ l = $drawing.Width - $cw; t = $drawing.Height - $ch; n = 'br' }
     )
     foreach ($c in $corners) {
-      $crop = Crop-Drawing $drawing $c.l $c.t $cw $ch 3.0
+      $crop = Crop-Drawing $cleanDrawing $c.l $c.t $cw $ch 3.0
       $sb = Get-SoftwareBitmapFromDrawing $crop
       $allLines += @(Ocr-SoftwareBitmap $engine $sb)
       $scales += @("corner-$($c.n)")
@@ -148,6 +182,7 @@ try {
     }
   }
   $drawing.Dispose()
+  $cleanDrawing.Dispose()
 
   # 合并去重（按文本，保留首次出现）
   $seen = @{}
