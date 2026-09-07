@@ -20,4 +20,8 @@ if(!title||!batch||rows.length<1){
 const toolDir=path.dirname(fileURLToPath(import.meta.url));
 const worker=path.join(toolDir,'task-platform-download.mjs');
 const run=(script,args)=>spawnSync(process.execPath,[...process.execArgv,script,...args],{stdio:'inherit',windowsHide:false}).status??1;
-process.exit(run(worker,['--task-file',taskFile,'--triple-platform','--watch','--local-task-center']));
+// --submit-only：只提交三端申请，提交完即退出（不等审核），供"先批量提交、最后统一审核"使用
+const submitOnly=process.argv.includes('--submit-only');
+const workerArgs=['--task-file',taskFile,'--triple-platform','--local-task-center'];
+if(!submitOnly)workerArgs.push('--watch');
+process.exit(run(worker,workerArgs));

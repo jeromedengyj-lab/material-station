@@ -1,4 +1,4 @@
-﻿"""素材准备站核心调度器回归测试。
+"""素材准备站核心调度器回归测试。
 
 覆盖：BookID 校验、队列串行、状态持久化、下载信息定位、候选生成写任务、
 三端别名退出码映射、删除/重试。全部通过 mock mjs 调用完成，不依赖 Chrome/Ollama。
@@ -501,7 +501,7 @@ def test_alias_only_mode_skips_download(core: StationCore, monkeypatch: pytest.M
     generate_called = []
     apply_called = []
     monkeypatch.setattr(core, "_generate", lambda t: generate_called.append(True) or setattr(t, "status", "generating"))
-    monkeypatch.setattr(core, "_apply", lambda t: apply_called.append(True))
+    monkeypatch.setattr(core, "_apply", lambda t, submit_only=False: apply_called.append(True))
     core._run_task(task)
     assert len(generate_called) == 1  # 应执行生成
     assert len(apply_called) == 1  # 应执行申请
@@ -526,7 +526,7 @@ def test_alias_only_mode_auto_fetch_info_when_missing(core: StationCore, monkeyp
     generate_called = []
     apply_called = []
     monkeypatch.setattr(core, "_generate", lambda t: generate_called.append(True) or setattr(t, "status", "generating"))
-    monkeypatch.setattr(core, "_apply", lambda t: apply_called.append(True))
+    monkeypatch.setattr(core, "_apply", lambda t, submit_only=False: apply_called.append(True))
     core._run_task(task)
     assert download_calls == [True]  # 调用了 _download 且 info_only=True
     assert len(generate_called) == 1  # 继续执行生成
@@ -607,7 +607,7 @@ def test_manual_alias_task_skips_to_apply(core: StationCore, monkeypatch: pytest
     generate_called = []
     monkeypatch.setattr(core, "_download", lambda t, info_only=False: download_called.append(True))
     monkeypatch.setattr(core, "_generate", lambda t: generate_called.append(True))
-    monkeypatch.setattr(core, "_apply", lambda t: apply_called.append(True))
+    monkeypatch.setattr(core, "_apply", lambda t, submit_only=False: apply_called.append(True))
     core._run_task(task)
     assert len(apply_called) == 1  # 直接调用_apply
     assert download_called == []  # 不调用_download

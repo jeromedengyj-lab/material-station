@@ -147,6 +147,8 @@ def main() -> int:
             STATUS_DOWNLOADING: "下载原剧+封面",
             STATUS_GENERATING: "生成候选别名",
             STATUS_APPLYING: "申请三端别名",
+            STATUS_SUBMITTED: "已提交待审核",
+            STATUS_REVIEWING: "统一审核中",
             STATUS_WAITING_MANUAL: "需人工处理",
             STATUS_DONE: "完成",
             STATUS_FAILED: "失败",

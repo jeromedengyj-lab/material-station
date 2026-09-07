@@ -43,6 +43,8 @@ STATUS_PENDING_MANUAL = "pending_manual"  # 等待手动输入别名（手动模
 STATUS_DOWNLOADING = "downloading"  # 下载原剧+封面中
 STATUS_GENERATING = "generating"    # 生成候选别名中
 STATUS_APPLYING = "applying"        # 申请三端别名中
+STATUS_SUBMITTED = "submitted"     # 已提交三端申请，待统一审核（先批量提交，最后统一审核）
+STATUS_REVIEWING = "reviewing"     # 统一审核中（轮询三端审核结果）
 STATUS_WAITING_MANUAL = "waiting_manual"  # 需要人工处理（滑块验证/平台故障）
 STATUS_DONE = "done"              # 三端全部通过
 STATUS_FAILED = "failed"          # 失败（可重试）
@@ -201,6 +203,7 @@ class StationCore:
         self.model_candidates = list(model_candidates)
         self._tasks: dict[str, StationTask] = {}
         self._queue: list[str] = []
+        self._review_queue: list[str] = []  # 已提交三端、待统一审核的任务
         self._running: StationTask | None = None
         self._close_requested = False
         self._log: list[str] = []
@@ -294,6 +297,13 @@ class StationCore:
         queue = data.get("queue") if isinstance(data, dict) else None
         if isinstance(queue, list):
             self._queue = [str(x) for x in queue if str(x) in self._tasks]
+        review_queue = data.get("review_queue") if isinstance(data, dict) else None
+        if isinstance(review_queue, list):
+            self._review_queue = [str(x) for x in review_queue if str(x) in self._tasks]
+        # 兼容兜底：任何处于"已提交待审核"状态的任务都应回到统一审核队列
+        for book_id, task in self._tasks.items():
+            if task.status == STATUS_SUBMITTED and book_id not in self._review_queue:
+                self._review_queue.append(book_id)
         saved_prefix = data.get("alias_prefix") if isinstance(data, dict) else None
         if isinstance(saved_prefix, str):
             self.alias_prefix = saved_prefix.strip()
@@ -327,6 +337,7 @@ class StationCore:
             "version": 1,
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "queue": self._queue,
+            "review_queue": self._review_queue,
             "alias_prefix": self.alias_prefix,
             "alias_mode": self.alias_mode,
             "fix_affix": self.fix_affix,
@@ -491,6 +502,8 @@ class StationCore:
     def remove_task(self, book_id: str) -> None:
         if book_id in self._queue:
             self._queue.remove(book_id)
+        if book_id in self._review_queue:
+            self._review_queue.remove(book_id)
         if self._running and self._running.book_id == book_id:
             return  # 正在运行，不允许直接删除
         self._tasks.pop(book_id, None)
@@ -498,7 +511,17 @@ class StationCore:
 
     def retry_task(self, book_id: str) -> None:
         task = self._tasks.get(book_id)
-        if not task or task.status in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
+        if not task or task.status in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING, STATUS_REVIEWING):
+            return
+        # 已提交过三端的任务：重试直接回到统一审核队列（不重复提交）
+        if task.status == STATUS_SUBMITTED:
+            task.status = STATUS_QUEUED
+            task.detail = "已重新加入统一审核队列"
+            task.error = ""
+            task.updated_at = time.time()
+            if book_id not in self._review_queue:
+                self._review_queue.append(book_id)
+            self._save_state()
             return
         task.status = STATUS_QUEUED
         task.error = ""
@@ -720,7 +743,11 @@ class StationCore:
 
     # ---------- 调度 ----------
     def tick(self) -> None:
-        """调度入口：每次调用最多启动一个任务，在后台线程执行，不阻塞 UI。"""
+        """调度入口：每次调用最多启动一个任务，在后台线程执行，不阻塞 UI。
+
+        先跑提交队列（下载/生成/提交三端，提交完即走，不等待审核）；
+        提交队列清空后，自动转入统一审核队列，逐个轮询三端审核结果。
+        """
         if self._running is not None:
             return
         if self._close_requested:
@@ -740,6 +767,21 @@ class StationCore:
                 thread = threading.Thread(target=self._run_task_async, args=(task,), daemon=True)
                 thread.start()
                 return
+            # 提交队列已空：进入统一审核阶段
+            while self._review_queue:
+                book_id = self._review_queue[0]
+                task = self._tasks.get(book_id)
+                if task is None:
+                    self._review_queue.pop(0)
+                    continue
+                if task.status == STATUS_DONE:
+                    self._review_queue.pop(0)
+                    continue
+                self._running = task
+                self._emit(book_id, STATUS_REVIEWING, "开始统一审核")
+                thread = threading.Thread(target=self._run_review_async, args=(task,), daemon=True)
+                thread.start()
+                return
 
     def _run_task_async(self, task: StationTask) -> None:
         """后台线程执行任务，结束后清理运行状态。"""
@@ -752,6 +794,17 @@ class StationCore:
                     self._queue.remove(task.book_id)
                 self._save_state()
 
+    def _run_review_async(self, task: StationTask) -> None:
+        """后台线程执行统一审核，结束后移出审核队列。"""
+        try:
+            self._review(task)
+        finally:
+            with self._lock:
+                self._running = None
+                if task.book_id in self._review_queue:
+                    self._review_queue.remove(task.book_id)
+                self._save_state()
+
     # ---------- 三阶段执行 ----------
     def _run_task(self, task: StationTask) -> None:
         if not self._ensure_model_service():
@@ -760,9 +813,9 @@ class StationCore:
             task.detail = task.error
             self._emit(task.book_id, task.status, task.detail)
             return
-        # 手动别名申请：跳过下载和生成，直接进入三端申请
+        # 手动别名申请：跳过下载和生成，直接进入三端申请（先提交，统一审核）
         if task.manual_alias and task.task_file:
-            self._apply(task)
+            self._apply(task, submit_only=True)
             return
         try:
             if self.alias_only:
@@ -802,7 +855,7 @@ class StationCore:
             self._generate(task)
             if task.status != STATUS_GENERATING:
                 return
-            self._apply(task)
+            self._apply(task, submit_only=True)
         except Exception as error:  # noqa: BLE001
             task.status = STATUS_FAILED
             task.error = str(error)
@@ -999,8 +1052,13 @@ class StationCore:
         self._save_state()
         self._emit(task.book_id, task.status, task.detail)
 
-    def _apply(self, task: StationTask) -> None:
-        """阶段三：申请三端别名并轮询审核结果。"""
+    def _apply(self, task: StationTask, submit_only: bool = False) -> None:
+        """阶段三：申请三端别名。
+
+        submit_only=True：只提交三端申请，不等审核结果（mjs --submit-only）。
+          提交完进入 waiting_review 的任务 → STATUS_SUBMITTED + 加入统一审核队列。
+        submit_only=False：完整流程，提交后原地轮询审核直到出结果（watch 模式）。
+        """
         task.status = STATUS_APPLYING
         task.detail = "正在申请三端关键词别名"
         task.updated_at = time.time()
@@ -1010,6 +1068,8 @@ class StationCore:
         adapter = self._adapter("run-alias-task.mjs")
         log_path = self._log_file(task, "alias")
         cmd = [self.node_command, "--experimental-websocket", str(adapter), str(task.task_file)]
+        if submit_only:
+            cmd.append("--submit-only")
         env = {
             **os.environ,
             "MANJU_TOOL_ROOT": str(self.tool_root),
@@ -1025,6 +1085,12 @@ class StationCore:
             task.status = STATUS_DONE
             task.approved_alias = approved
             task.detail = f"三端全部审核通过：{approved}"
+        elif submit_only and return_code == 0 and status == "waiting_review":
+            # 已提交三端、平台审核中：不原地等待，转入统一审核队列
+            task.status = STATUS_SUBMITTED
+            task.detail = "已提交三端申请，待统一审核"
+            if task.book_id not in self._review_queue:
+                self._review_queue.append(task.book_id)
         elif return_code in (_ALIAS_EXIT_MANUAL, _ALIAS_EXIT_RETRY):
             task.status = STATUS_WAITING_MANUAL
             reason = "检测到平台滑块/安全验证" if return_code == _ALIAS_EXIT_MANUAL else "平台控件故障"
@@ -1041,6 +1107,15 @@ class StationCore:
         task.updated_at = time.time()
         self._save_state()
         self._emit(task.book_id, task.status, task.detail)
+
+    def _review(self, task: StationTask) -> None:
+        """统一审核阶段：以 watch 模式轮询已提交任务的审核结果，直到通过或失败。"""
+        task.status = STATUS_REVIEWING
+        task.detail = "统一审核中，正在轮询三端审核结果"
+        task.updated_at = time.time()
+        self._save_state()
+        self._emit(task.book_id, task.status, task.detail)
+        self._apply(task, submit_only=False)
 
     # ---------- 辅助 ----------
     def _ensure_model_service(self) -> bool:
