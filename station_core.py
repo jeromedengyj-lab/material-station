@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import atexit
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +68,79 @@ def _safe_filename(value: str) -> str:
     """替换 Windows 文件名非法字符，用于日志文件名。"""
     import re
     return re.sub(r'[\\/:*?"<>|]', "_", str(value or ""))
+
+
+# ---------- 子进程与角色锁的退出清理 ----------
+# 背景：程序退出时若 mjs/node 子进程仍在运行（wait 阻塞中），daemon 线程被
+# 强杀后 node 变孤儿进程继续持有浏览器角色锁（alias.lock/download.lock）；
+# 锁内旧 PID 被系统复用后，下次启动所有任务被误判"已有任务在运行"（退出码28）。
+# 因此：登记所有子进程，程序退出时统一终止；同时删除角色锁，保证下次启动可运行。
+_ACTIVE_PROCS: list = []
+_ACTIVE_PROCS_GUARD = threading.Lock()
+
+
+def _register_active_proc(process: subprocess.Popen) -> None:
+    with _ACTIVE_PROCS_GUARD:
+        _ACTIVE_PROCS.append(process)
+
+
+def _unregister_active_proc(process: subprocess.Popen) -> None:
+    with _ACTIVE_PROCS_GUARD:
+        try:
+            _ACTIVE_PROCS.remove(process)
+        except ValueError:
+            pass
+
+
+def terminate_active_procs(grace: float = 3.0) -> int:
+    """终止所有登记中的子进程（先 terminate 优雅退出，超时再 kill）。
+
+    返回本次实际终止的进程数；无活动进程时返回 0。
+    """
+    with _ACTIVE_PROCS_GUARD:
+        procs = list(_ACTIVE_PROCS)
+    killed = 0
+    for proc in procs:
+        if proc.poll() is None:
+            killed += 1
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+    if killed:
+        deadline = time.time() + grace
+        while time.time() < deadline:
+            with _ACTIVE_PROCS_GUARD:
+                alive = [p for p in _ACTIVE_PROCS if p.poll() is None]
+            if not alive:
+                break
+            time.sleep(0.05)
+        for proc in procs:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+    return killed
+
+
+def clean_role_locks(tool_root: str | Path) -> int:
+    """删除 runtime/platform_adapter 下的角色锁（alias.lock/download.lock）。
+
+    只删这两个锁，不动其他文件；目录缺失时安全返回 0。
+    """
+    lock_dir = Path(tool_root) / "runtime" / "platform_adapter"
+    removed = 0
+    if lock_dir.is_dir():
+        for name in ("alias.lock", "download.lock"):
+            target = lock_dir / name
+            try:
+                if target.is_file():
+                    target.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 @dataclass
@@ -140,6 +214,9 @@ class StationCore:
         self.manual_mode = False  # True=手动别名模式：新任务不自动执行，等用户手动输入别名
         self._ensure_dirs()
         self._load_state()
+        # 程序退出时：终止登记中的子进程（防 node 孤儿持锁）+ 删除角色锁
+        tool_root = self.tool_root
+        atexit.register(lambda: (terminate_active_procs(), clean_role_locks(tool_root)))
 
     def request_close(self) -> None:
         self._close_requested = True
@@ -1011,7 +1088,11 @@ class StationCore:
                 stdout=handle, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            return_code = process.wait()
+            _register_active_proc(process)
+            try:
+                return_code = process.wait()
+            finally:
+                _unregister_active_proc(process)
         try:
             output = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:

@@ -20,3 +20,5 @@ Thumbs.db
 push_*.log
 push_result*.log
 push_log.txt
+
+build_station_portable/
