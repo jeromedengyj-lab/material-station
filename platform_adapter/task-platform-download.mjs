@@ -48,8 +48,8 @@ const ROLE_LOCK_DIR=path.join(APP_ROOT,'runtime','platform_adapter');
 const ROLE_LOCK=path.join(ROLE_LOCK_DIR,`${BROWSER_ROLE}.lock`);
 const val=argValue;
 let title=String(taskManifest.title||val('--title')).trim(), loginOnly=argv.includes('--login-only'),inspectOnly=argv.includes('--inspect-current'),infoOnly=argv.includes('--info-only');
-const requestedContentType=(val('--content-type').trim().toLowerCase()||'manju');
-if(!Object.prototype.hasOwnProperty.call(CONTENT_TYPE_LABELS,requestedContentType))throw new Error(`--content-type 只支持 ${Object.keys(CONTENT_TYPE_LABELS).join('/')}，收到：${requestedContentType}`);
+const requestedContentType=(val('--content-type').trim().toLowerCase()||'');
+if(requestedContentType&&!Object.prototype.hasOwnProperty.call(CONTENT_TYPE_LABELS,requestedContentType))throw new Error(`--content-type 只支持 ${Object.keys(CONTENT_TYPE_LABELS).join('/')}，收到：${requestedContentType}`);
 const DOWNLOAD_TAB=16;
 let ACTIVE_TAB=DOWNLOAD_TAB; // 实际内容 tab：由搜索结果的 content_tab 动态决定（网文/漫剧/短剧各不相同）
 const batchId=String(taskManifest.batch_id||val('--batch-id')).trim();
@@ -443,7 +443,7 @@ try{
  const isType=apiSaysType||cardEvidence.ok;
  if(!isType){
    const observed=[Number.isFinite(platformTypeCode)?`tab_type=${platformTypeCode}`:'',...platformTypeLabels].filter(Boolean).join(' / ')||`接口未返回类型标签；同卡片可见标签核验失败（精确标题节点${cardEvidence.exactTitleNodes||0}个）`;
-   die(`精确匹配结果不是“${CONTENT_TYPE_LABELS[requestedContentType]||requestedContentType}”（${observed}），已停止，禁止下载或写入任务表。`,22);
+   die(`精确匹配结果不是“${CONTENT_TYPE_LABELS[requestedContentType]||'不限'}”（${observed}），已停止，禁止下载或写入任务表。`,22);
  }
  ACTIVE_TAB=Number.isFinite(platformTypeCode)&&platformTypeCode>0?platformTypeCode:DOWNLOAD_TAB;
  console.log(`精确匹配：${book.book_name}，${book.chapter_num||book.chapter_count||book.total_chapter_num||'未知'} 集${expectedEpisodes?'（已按全集数量核对）':''}，BookID：${book.book_id}，类型：${CONTENT_TYPE_LABELS[requestedContentType]||'不限'}（${apiSaysType?'接口字段':'同一结果卡片可见标签'}）`);
