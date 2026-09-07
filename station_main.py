@@ -128,7 +128,8 @@ def main() -> int:
     # 独立仓库：station_core.py 与 station_main.py 同目录（开发/打包一致）
     from station_core import (
         StationCore, STATUS_QUEUED, STATUS_DOWNLOADING, STATUS_GENERATING,
-        STATUS_APPLYING, STATUS_WAITING_MANUAL, STATUS_DONE, STATUS_FAILED,
+        STATUS_APPLYING, STATUS_SUBMITTED, STATUS_REVIEWING,
+        STATUS_WAITING_MANUAL, STATUS_DONE, STATUS_FAILED,
     )
 
     tool_root = _tool_root()
