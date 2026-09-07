@@ -363,14 +363,10 @@ def main() -> int:
                     self.book_input.setText(title)
                     if meta["episodes"]:
                         self.episodes_input.setText(str(meta["episodes"]))
-                    if meta["content_type"]:
-                        idx = {"manju": 1, "wangwen": 2, "duanju": 3}[meta["content_type"]]
-                        self.type_combo.setCurrentIndex(idx)
+                    # 内容类型不回填：它是用户主动选择（识图/搜索的定位条件），避免识别词覆盖
                     tip = f"识图完成：剧名「{title}」"
                     if meta["episodes"]:
                         tip += f"，{meta['episodes']} 集"
-                    if meta["content_type"]:
-                        tip += f"，类型 {meta['content_type']}"
                     if meta.get("tags"):
                         tip += f"，标签 {'/'.join(meta['tags'])}"
                     tip += "（识别结果可修改，确认后点「添加任务」）"
@@ -381,7 +377,9 @@ def main() -> int:
             # 多张：逐个识别并直接批量添加任务（识别不出/乱码/重复的跳过并汇报）
             self._append_log(f"批量识图开始：共 {len(file_paths)} 张")
             try:
-                result = core.add_tasks_from_images(file_paths)
+                # 内容类型取当前下拉值（用户主动选择，应用到每张图的任务）
+                type_key = ["", "manju", "wangwen", "duanju"][self.type_combo.currentIndex()]
+                result = core.add_tasks_from_images(file_paths, content_type=type_key)
             except Exception as error:  # noqa: BLE001
                 QMessageBox.critical(self, "批量识图失败", str(error))
                 return
@@ -389,8 +387,8 @@ def main() -> int:
                 tip = f"  已添加：{title}"
                 if meta.get("episodes"):
                     tip += f"（{meta['episodes']}集）"
-                if meta.get("content_type"):
-                    tip += f"（{meta['content_type']}）"
+                if type_key:
+                    tip += f"（{type_key}）"
                 self._append_log(tip)
             for label, reason in result["skipped"]:
                 self._append_log(f"  跳过：{os.path.basename(str(label))} → {reason}")

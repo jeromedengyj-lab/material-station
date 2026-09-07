@@ -120,7 +120,7 @@ def test_download_defaults_to_unlimited(core: StationCore, monkeypatch: pytest.M
 
 
 def test_parse_ocr_meta_extracts_all(core: StationCore) -> None:
-    """识图解析：剧名（最长行）+ 集数（68集）+ 标签（漫剧）；OCR 中文间空格被清理。"""
+    """识图解析：剧名（最长行）+ 集数（68集）+ 标签；OCR 中文间空格被清理。类型不被 OCR 识别。"""
     lines = [
         {"line": 1, "text": "破 译 起 手 从 卡 bug 到 诸 天 禁 忌"},
         {"line": 2, "text": "漫剧"},
@@ -130,7 +130,7 @@ def test_parse_ocr_meta_extracts_all(core: StationCore) -> None:
     # 中文间空格被清理；英文词间空格保留（mjs 搜索归一化会去掉全部空白，不影响匹配）
     assert meta["title"] == "破译起手从卡 bug 到诸天禁忌"
     assert meta["episodes"] == 68
-    assert meta["content_type"] == "manju"
+    assert meta["content_type"] == ""  # 类型由用户主动选择，OCR 不识别
 
 
 def test_parse_ocr_meta_fallback(core: StationCore) -> None:

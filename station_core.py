@@ -831,7 +831,8 @@ class StationCore:
     def parse_ocr_meta(cls, lines: list[dict]) -> dict:
         """从 OCR 行提取 {title, episodes, content_type, tags}。
 
-        - content_type：精确词 网文/漫剧/短剧
+        - content_type：恒空——内容类型是用户主动选择的（识图/搜索时的定位条件），
+          不是 OCR 识别对象，避免识别词覆盖用户选择
         - tags：平台状态标签（新剧/热剧/独播/完结/限免/会员…），含 OCR 短行模糊还原
           （"新0"/"新囗" → 新剧）
         - episodes：正则 `(\\d{1,4})\\s*集` / `第(\\d+)集`
@@ -840,11 +841,6 @@ class StationCore:
         """
         texts = [str(x.get("text", "") or "").strip() for x in lines if str(x.get("text", "") or "").strip()]
         meta: dict = {"title": "", "episodes": 0, "content_type": "", "tags": []}
-        for text in texts:
-            for key, label in (("manju", "漫剧"), ("wangwen", "网文"), ("duanju", "短剧")):
-                if label in text:
-                    meta["content_type"] = key
-                    break
         # 状态标签：完整词 + 短行模糊还原（"新0"→"新剧"）
         tags: list[str] = []
         for text in texts:
@@ -902,13 +898,18 @@ class StationCore:
         meta["title"] = best
         return meta
 
-    def add_tasks_from_images(self, image_paths: list[str | Path]) -> dict:
-        """批量识图添加任务：逐张 OCR → 提取剧名/集数/标签 → 创建任务。
+    def add_tasks_from_images(self, image_paths: list[str | Path], content_type: str = "") -> dict:
+        """批量识图添加任务：逐张 OCR → 提取剧名/集数 → 创建任务。
 
+        - content_type：用户主动选择的内容类型（"manju"/"wangwen"/"duanju"，空=不限），
+          应用到每张图添加的任务——类型不是 OCR 识别对象，同名不同标签时按此过滤
         - 识别不出剧名 / 乱码低质量 / 已在任务列表 的图片计入 skipped（不中断整批）
-        - 集数/类型以识别结果为准（覆盖全局配置），识别不到则用全局默认
+        - 集数以识别结果为准，识别不到则用 0（不限制）
         - 返回 {"added": [(剧名, meta)], "skipped": [(图片, 原因)]}
         """
+        content_type = str(content_type or "").strip()
+        if content_type and content_type not in ("manju", "wangwen", "duanju"):
+            raise ValueError(f"内容类型只支持 manju/wangwen/duanju，got: {content_type}")
         added: list[tuple[str, dict]] = []
         skipped: list[tuple[str, str]] = []
         for raw in image_paths:
@@ -921,16 +922,14 @@ class StationCore:
                 if not title or self._ocr_text_quality(title) < 0.45:
                     skipped.append((label, "未识别出有效剧名（图片文字不清晰或为乱码）"))
                     continue
-                task = self.add_task(title)
+                task = self.add_task(title, content_type=content_type)
                 if meta["episodes"]:
                     task.expected_episodes = meta["episodes"]
-                if meta["content_type"]:
-                    task.content_type = meta["content_type"]
                 parts = [title]
                 if meta["episodes"]:
                     parts.append(f"{meta['episodes']}集")
-                if meta["content_type"]:
-                    parts.append(meta["content_type"])
+                if content_type:
+                    parts.append(content_type)
                 if meta.get("tags"):
                     parts.append("/".join(meta["tags"]))
                 task.detail = "识图添加：" + "，".join(parts)
@@ -941,7 +940,6 @@ class StationCore:
             except Exception as error:  # noqa: BLE001
                 skipped.append((label, str(error)))
         return {"added": added, "skipped": skipped}
-        self._save_state()
 
     def set_fix_affix(self, enabled: bool) -> None:
         """设置固定前缀/后缀开关：True=必须在别名前缀框填写固定字，False=AI自由生成4字别名。"""

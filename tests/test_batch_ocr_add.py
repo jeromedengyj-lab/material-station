@@ -126,7 +126,7 @@ def test_parse_ocr_meta_strips_truncation_marker(core: StationCore) -> None:
 
 
 def test_add_tasks_from_images_batch(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
-    """批量识图：识别出的任务自动添加（剧名+集数+类型），低质量图片跳过。"""
+    """批量识图：识别出的任务自动添加（剧名+集数+用户选择的类型），低质量图片跳过。"""
     ocr_results = {
         "a.png": [
             _ocr_line("天命神算", 1),
@@ -143,16 +143,29 @@ def test_add_tasks_from_images_batch(core: StationCore, monkeypatch: pytest.Monk
         core, "ocr_image",
         lambda p: ocr_results.get(Path(p).name, []),
     )
-    result = core.add_tasks_from_images(["a.png", "b.jpg", "c.png"])
+    # 类型是用户主动选择传入的（不是 OCR 识别）；不传=不限
+    result = core.add_tasks_from_images(["a.png", "b.jpg", "c.png"], content_type="manju")
     assert len(result["added"]) == 2
     assert len(result["skipped"]) == 1
-    # a.png：剧名+68集+漫剧
+    # a.png：剧名+68集+用户选的漫剧（图片里的"漫剧"字样不参与类型识别）
     task_a = core._tasks["title:天命神算"]
     assert task_a.expected_episodes == 68
     assert task_a.content_type == "manju"
-    # b.jpg：剧名+115集（无标签，保持全局/空）
+    # b.jpg：剧名+115集（同一批次都带用户选择的类型）
     task_b = core._tasks["title:破译起手！从卡bug到诸天禁忌"]
     assert task_b.expected_episodes == 115
+    assert task_b.content_type == "manju"
+
+
+def test_parse_ocr_meta_never_detects_content_type(core: StationCore) -> None:
+    """OCR 不识别内容类型（类型是用户主动选的）——图片里的"网文/漫剧/短剧"字样不影响任务类型。"""
+    lines = [
+        _ocr_line("护花高手在都市", 1),
+        _ocr_line("网文", 2),
+    ]
+    meta = core.parse_ocr_meta(lines)
+    assert meta["content_type"] == ""
+    assert meta["title"] == "护花高手在都市"
 
 
 def test_add_tasks_from_images_duplicate_skipped(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
