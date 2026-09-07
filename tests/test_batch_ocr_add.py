@@ -114,6 +114,17 @@ def test_parse_ocr_meta_keeps_tag_in_real_title(core: StationCore) -> None:
     assert meta["title"] == "新剧情缘之天桥乞讨"
 
 
+def test_parse_ocr_meta_strips_truncation_marker(core: StationCore) -> None:
+    """剧名显示不全的省略号（"…"/"..."）被清理，不进入搜索词。"""
+    lines = [
+        _ocr_line("竟敢欺我年迈抢祖宅，和贫道仙法…", 1, words=["竟敢欺我年迈抢祖宅，和贫道仙法…"]),
+        _ocr_line("选集·全128集·免费观看", 2),
+    ]
+    meta = core.parse_ocr_meta(lines)
+    assert meta["title"] == "竟敢欺我年迈抢祖宅，和贫道仙法"
+    assert meta["episodes"] == 128
+
+
 def test_add_tasks_from_images_batch(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
     """批量识图：识别出的任务自动添加（剧名+集数+类型），低质量图片跳过。"""
     ocr_results = {

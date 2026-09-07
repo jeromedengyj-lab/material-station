@@ -203,7 +203,7 @@ def main() -> int:
             top.addSpacing(12)
             top.addWidget(QLabel("内容类型："))
             self.type_combo = QComboBox()
-            self.type_combo.addItems(["漫剧", "网文", "短剧"])
+            self.type_combo.addItems(["不限", "漫剧", "网文", "短剧"])
             self.type_combo.setCurrentIndex(0)
             self.type_combo.currentIndexChanged.connect(self._on_type_changed)
             top.addWidget(self.type_combo)
@@ -327,9 +327,9 @@ def main() -> int:
             self._append_log(f"手动别名模式：{'开启' if enabled else '关闭'}（导入后不自动执行，等手动输入别名）")
 
         def _on_type_changed(self, index: int) -> None:
-            key = ["manju", "wangwen", "duanju"][index]
+            key = ["", "manju", "wangwen", "duanju"][index]
             core.set_content_type(key)
-            self._append_log(f"内容类型：{['漫剧', '网文', '短剧'][index]}（同名时按此标签精确匹配）")
+            self._append_log(f"内容类型：{['不限', '漫剧', '网文', '短剧'][index]}（同名时按此标签精确匹配；不限=不按类型过滤）")
 
         def _on_episodes_changed(self) -> None:
             text = self.episodes_input.text().strip()
@@ -365,7 +365,7 @@ def main() -> int:
                         self.episodes_input.setText(str(meta["episodes"]))
                         core.set_expected_episodes(meta["episodes"])
                     if meta["content_type"]:
-                        idx = {"manju": 0, "wangwen": 1, "duanju": 2}[meta["content_type"]]
+                        idx = {"manju": 1, "wangwen": 2, "duanju": 3}[meta["content_type"]]
                         self.type_combo.setCurrentIndex(idx)
                         core.set_content_type(meta["content_type"])
                     tip = f"识图完成：剧名「{title}」"

@@ -99,15 +99,31 @@ function Crop-Drawing($Source, $left, $top, $width, $height, $Scale) {
 function Ocr-SoftwareBitmap($Engine, $SoftBitmap) {
   $result = Await ($Engine.RecognizeAsync($SoftBitmap)) ([Windows.Media.Ocr.OcrResult])
   $outLines = @()
+  $iw = [double]$SoftBitmap.PixelWidth
+  $ih = [double]$SoftBitmap.PixelHeight
   foreach ($line in $result.Lines) {
     $text = $line.Text -replace '\s+', ''
     if (-not $text) { continue }
     $words = @()
+    $lineX = [double]::MaxValue
+    $lineY = [double]::MaxValue
+    $lineX2 = 0.0
+    $lineY2 = 0.0
     foreach ($w in $line.Words) {
       $conf = [math]::Round($w.Confidence * 100)
-      $words += @{ text = $w.Text; conf = $conf }
+      $r = $w.BoundingRect
+      $x = [math]::Round($r.X / $iw, 3)
+      $y = [math]::Round($r.Y / $ih, 3)
+      $ww = [math]::Round($r.Width / $iw, 3)
+      $hh = [math]::Round($r.Height / $ih, 3)
+      if ($r.X -lt $lineX) { $lineX = [math]::Round($r.X / $iw, 3) }
+      if ($r.Y -lt $lineY) { $lineY = [math]::Round($r.Y / $ih, 3) }
+      if (($r.X + $r.Width) -gt $lineX2) { $lineX2 = [math]::Round(($r.X + $r.Width) / $iw, 3) }
+      if (($r.Y + $r.Height) -gt $lineY2) { $lineY2 = [math]::Round(($r.Y + $r.Height) / $ih, 3) }
+      $words += @{ text = $w.Text; conf = $conf; x = $x; y = $y; w = $ww; h = $hh }
     }
-    $outLines += @{ text = $text; words = $words }
+    if ($lineX -eq [double]::MaxValue) { $lineX = 0; $lineY = 0; $lineX2 = 0; $lineY2 = 0 }
+    $outLines += @{ text = $text; words = $words; x = $lineX; y = $lineY; w = [math]::Round($lineX2 - $lineX, 3); h = [math]::Round($lineY2 - $lineY, 3) }
   }
   return $outLines
 }
@@ -148,6 +164,15 @@ try {
     $allLines += @(Ocr-SoftwareBitmap $engine $sb2)
     $scales += @('zoom2x')
     $zoom2.Dispose()
+
+    # 3.5) 中带裁剪放大（覆盖竖屏播放页底部标题区：剧名/简介/选集集中在 y 25%~55%）
+    [int]$bandY1 = [int]($drawing.Height * 0.25)
+    [int]$bandH = [int]($drawing.Height * 0.30)
+    $band = Crop-Drawing $cleanDrawing 0 $bandY1 $drawing.Width $bandH 3.0
+    $sbBand = Get-SoftwareBitmapFromDrawing $band
+    $allLines += @(Ocr-SoftwareBitmap $engine $sbBand)
+    $scales += @('band-mid')
+    $band.Dispose()
 
     # 4) 左右边缘窄条裁剪 8x 放大（覆盖角落小标签/红标：新剧、热剧、漫剧角标等）
     #    仅对低矮小图执行（搜索结果卡片/封面角标场景；大截图文字大，过滤图+2x 已足够）

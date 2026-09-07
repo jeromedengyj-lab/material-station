@@ -92,3 +92,9 @@ def test_unknown_type_not_blocking() -> None:
     """未知类型 key 不拦截（兼容旧行为）。"""
     r = _pick(MIXED, SAME_NAME, {"contentType": "manhua"})
     assert len(r["filtered"]) == 3
+
+
+def test_empty_type_not_blocking() -> None:
+    """空类型（不限）不拦截——默认值兜底回归：不选类型=不按类型过滤。"""
+    r = _pick(MIXED, SAME_NAME, {"contentType": ""})
+    assert len(r["filtered"]) == 3

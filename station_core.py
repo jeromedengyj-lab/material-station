@@ -753,7 +753,7 @@ class StationCore:
         self._save_state()
 
     def set_content_type(self, type_key: str) -> None:
-        """设置全局内容类型：manju=漫剧 / wangwen=网文 / duanju=短剧；空=不限制（mjs 默认漫剧）。"""
+        """设置全局内容类型：manju=漫剧 / wangwen=网文 / duanju=短剧；空=不限制（不过滤、不核验）。"""
         type_key = str(type_key or "").strip()
         if type_key and type_key not in ("manju", "wangwen", "duanju"):
             raise ValueError(f"内容类型只支持 manju/wangwen/duanju，got: {type_key}")
@@ -874,6 +874,9 @@ class StationCore:
         best = max(pool, key=lambda t: (len(t), len(re.findall(r"[\u4e00-\u9fff]", t))))
         # OCR 会在汉字之间插入空格（"沂 居 天 桥"），去掉中文-中文之间的空白；英文词间空格保留
         best = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", best)
+        # 清理显示不全的截断符（"…"/"..."/"。。"结尾 = 平台省略号，不是剧名一部分）
+        best = re.sub(r"(?:…|\.\.\.|。{2,})$", "", best)
+        best = best.strip()
         # 绿色过滤后角标与剧名连行（"新剧天桥乞讨…"）：OCR 独立词命中的标签词在开头 → 移除
         leading_tags = set()
         for x in lines:
@@ -1107,7 +1110,7 @@ class StationCore:
         adapter = self._adapter("task-platform-download.mjs")
         log_path = self._log_file(task, "download")
         extra_args = ["--info-only"] if info_only else []
-        content_type = (task.content_type or self.content_type or "manju").strip()
+        content_type = (task.content_type or self.content_type or "").strip()
         if task.expected_episodes > 0:
             extra_args = [*extra_args, "--expected-episodes", str(task.expected_episodes)]
         if task.input_type == "title":

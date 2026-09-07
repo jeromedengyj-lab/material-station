@@ -95,8 +95,8 @@ def test_download_passes_type_and_episodes(core: StationCore, monkeypatch: pytes
     assert "--expected-episodes" in cmd and cmd[cmd.index("--expected-episodes") + 1] == "115"
 
 
-def test_download_defaults_to_manju(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
-    """未设置类型时仍传 manju（mjs 旧行为兜底）。"""
+def test_download_defaults_to_unlimited(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未设置类型时传空（不限制）——回归：txt 剧名导入不再被默认漫剧过滤。"""
     task = core.add_book_id(BOOK_ID)
     captured: dict = {}
     monkeypatch.setattr(
@@ -106,7 +106,7 @@ def test_download_defaults_to_manju(core: StationCore, monkeypatch: pytest.Monke
     monkeypatch.setattr(core, "_locate_info", lambda *a: None)
     core._download(task)
     cmd = captured["cmd"]
-    assert cmd[cmd.index("--content-type") + 1] == "manju"
+    assert cmd[cmd.index("--content-type") + 1] == ""
     assert "--expected-episodes" not in cmd
 
 
