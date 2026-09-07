@@ -243,3 +243,46 @@ def test_remove_task_also_removes_from_review_queue(core: StationCore) -> None:
     core.remove_task(BOOK_ID)
     assert core._tasks.get(BOOK_ID) is None
     assert BOOK_ID not in core._review_queue
+
+
+def _write_info(core: StationCore, book_id: str, title: str = "示例剧") -> None:
+    info_dir = core.data_root / "选剧文件夹" / "原剧视频" / title / "剧目信息"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    (info_dir / "剧目信息.json").write_text(
+        json.dumps({"title": title, "book_id": book_id}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_apply_manual_alias_to_submitted_goes_to_review_queue(core: StationCore) -> None:
+    """已提交待审核的任务批量改别名：更新别名后回统一审核队列，不得塞回主队列重新提交。"""
+    _write_info(core, BOOK_ID)
+    task = core.add_book_id(BOOK_ID)
+    task.task_file = str(_write_task_file(
+        core.data_root / "选剧文件夹" / "原剧视频" / "示例剧", BOOK_ID))
+    task.status = STATUS_SUBMITTED
+    if BOOK_ID in core._queue:
+        core._queue.remove(BOOK_ID)  # 已提交任务不在主队列
+    if BOOK_ID not in core._review_queue:
+        core._review_queue.append(BOOK_ID)
+    core._save_state()
+
+    core.apply_manual_alias_to_tasks([BOOK_ID], "新名藏锋")
+    assert task.status == STATUS_QUEUED
+    assert "待统一审核" in task.detail
+    assert BOOK_ID in core._review_queue
+    assert BOOK_ID not in core._queue
+
+
+def test_apply_manual_alias_to_queued_goes_to_main_queue(core: StationCore) -> None:
+    """普通排队任务批量改别名：仍走主队列（防回归）。"""
+    _write_info(core, BOOK_ID)
+    task = core.add_book_id(BOOK_ID)
+    task.task_file = str(_write_task_file(
+        core.data_root / "选剧文件夹" / "原剧视频" / "示例剧", BOOK_ID))
+    core._save_state()
+
+    core.apply_manual_alias_to_tasks([BOOK_ID], "新名藏锋")
+    assert task.status == STATUS_QUEUED
+    assert BOOK_ID in core._queue
+    assert BOOK_ID not in core._review_queue

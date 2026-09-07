@@ -466,19 +466,26 @@ class StationCore:
                         if not is_book and len(alias_names) > 1:
                             task_key = f"title:{identifier}"
                             existing = self._tasks.get(task_key)
-                            if existing and existing.status not in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING):
+                            if existing and existing.status not in (STATUS_DOWNLOADING, STATUS_GENERATING, STATUS_APPLYING, STATUS_REVIEWING):
                                 # 追加新别名，去重
                                 existing.manual_alias = True
                                 merged = list(dict.fromkeys((existing.manual_alias_names or []) + alias_names))
                                 existing.manual_alias_names = merged
                                 existing.manual_alias_name = merged[0]
-                                existing.detail = f"手动别名（追加）：{'、'.join(merged)}"
-                                # 重置状态重新入队
-                                existing.status = STATUS_QUEUED
                                 existing.error = ""
                                 existing.task_file = ""
-                                if existing.book_id not in self._queue:
-                                    self._queue.append(existing.book_id)
+                                if existing.status == STATUS_SUBMITTED:
+                                    # 已提交过三端的任务：追加别名后回统一审核队列（不重复提交）
+                                    existing.status = STATUS_QUEUED
+                                    existing.detail = f"手动别名（追加）：{'、'.join(merged)}，待统一审核"
+                                    if existing.book_id not in self._review_queue:
+                                        self._review_queue.append(existing.book_id)
+                                else:
+                                    # 重置状态重新入队
+                                    existing.status = STATUS_QUEUED
+                                    existing.detail = f"手动别名（追加）：{'、'.join(merged)}"
+                                    if existing.book_id not in self._queue:
+                                        self._queue.append(existing.book_id)
                                 existing.updated_at = time.time()
                                 self._save_state()
                                 added.append(existing.input_value or existing.book_id)
@@ -597,12 +604,19 @@ class StationCore:
         # 6. 设置任务为手动别名模式，加入队列
         task.manual_alias = True
         task.task_file = str(task_file)
-        task.status = STATUS_QUEUED
         task.error = ""
-        task.detail = f"手动别名已提交：{'、'.join(validated)}"
+        if task.status == STATUS_SUBMITTED:
+            # 已提交过三端的任务：更新别名后回统一审核队列（mjs 对未提交候选会自动先提交再审核）
+            task.status = STATUS_QUEUED
+            task.detail = f"别名已更新：{'、'.join(validated)}，待统一审核"
+            if task.book_id not in self._review_queue:
+                self._review_queue.append(task.book_id)
+        else:
+            task.status = STATUS_QUEUED
+            task.detail = f"手动别名已提交：{'、'.join(validated)}"
+            if task.book_id not in self._queue:
+                self._queue.append(task.book_id)
         task.updated_at = time.time()
-        if task.book_id not in self._queue:
-            self._queue.append(task.book_id)
         self._save_state()
         self._emit(task.book_id, task.status, task.detail)
         return task
@@ -682,12 +696,19 @@ class StationCore:
             # 设置任务为手动别名模式，加入队列
             task.manual_alias = True
             task.task_file = str(task_file)
-            task.status = STATUS_QUEUED
             task.error = ""
-            task.detail = f"手动别名已提交：{alias}"
+            if task.status == STATUS_SUBMITTED:
+                # 已提交过三端的任务：更新别名后回统一审核队列（mjs 对未提交候选会自动先提交再审核）
+                task.status = STATUS_QUEUED
+                task.detail = f"别名已更新：{alias}，待统一审核"
+                if task.book_id not in self._review_queue:
+                    self._review_queue.append(task.book_id)
+            else:
+                task.status = STATUS_QUEUED
+                task.detail = f"手动别名已提交：{alias}"
+                if task.book_id not in self._queue:
+                    self._queue.append(task.book_id)
             task.updated_at = time.time()
-            if task.book_id not in self._queue:
-                self._queue.append(task.book_id)
             self._save_state()
             self._emit(task.book_id, task.status, task.detail)
             results.append(task)
