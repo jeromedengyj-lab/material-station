@@ -6,6 +6,7 @@ import {spawn} from 'node:child_process';
 import {Readable} from 'node:stream';
 import {finished} from 'node:stream/promises';
 import {matchRejectText, REJECT_MATCH_JS} from './reject-patterns.mjs';
+import {validateCandidates} from './candidate-validation.mjs';
 import {resolveSharedRoot} from './shared-root.mjs';
 
 let ROOT;
@@ -59,6 +60,7 @@ const manifestAliases=manifestRows.map(row=>String(row?.alias||'').trim()).filte
 const aliases=manifestAliases;
 const aliasPrefix=String(taskManifest.alias_prefix||manifestAliases[0]?.slice(0,2)||'知夏').trim();
 const aliasMode=String(taskManifest.alias_mode||'prefix').trim();
+const manualMode=taskManifest.manual===true; // 手动别名：跳过固定字校验，按提供的原样申请
 const _escapedPrefix=aliasPrefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const aliasPattern=aliasMode==='suffix'
     ? new RegExp(`^[\\u4e00-\\u9fff]{2}${_escapedPrefix}$`)
@@ -297,8 +299,9 @@ async function runTripleWorkflow(c){
   // 任务文件会保留历史候选并追加新一批，不能再假设文件中永远只有3条。
   if(aliases.length<1)die('三端审核模式至少需要1个候选别名。',21);
   if(!/^[\u4e00-\u9fff]{2}$/.test(aliasPrefix))die('任务文件中的别名前缀必须恰好是2个中文汉字。',22);
+  const v=validateCandidates(aliases,aliasPrefix,aliasMode,manualMode);
+  if(!v.ok)die(v.message,22);
   const _affixLabel=aliasMode==='suffix'?`以“${aliasPrefix}”结尾`:`以“${aliasPrefix}”开头`;
-  if(aliases.some(x=>!aliasPattern.test(x))||new Set(aliases).size!==aliases.length)die(`候选必须互不重复、${_affixLabel}且恰好四个汉字。`,22);
  const explicitStateFile=requestedTaskFile?path.resolve(requestedTaskFile):'';
  const dir=explicitStateFile?path.dirname(path.dirname(explicitStateFile)):path.join(OUTPUT,safe(title));
  const infoDir=path.join(dir,'剧目信息'),metaFile=path.join(infoDir,'剧目信息.json'),stateFile=explicitStateFile||path.join(infoDir,'三端别名任务.json'),lockFile=`${stateFile}.lock`;await fsp.mkdir(infoDir,{recursive:true});

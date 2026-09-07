@@ -549,18 +549,17 @@ class StationCore:
         raw_aliases = [a.strip() for a in re.split(r"[|,，\s\n]+", str(aliases_text or "")) if a.strip()]
         if not raw_aliases:
             raise ValueError("请输入至少一个别名")
-        # 2. 校验别名格式（手动别名不被前缀后缀限制，只要求恰好4个中文字）
+        # 2. 校验别名格式（手动别名不被前缀后缀限制，只要求恰好4个中文字且互不重复）
         invalid = [a for a in raw_aliases if not re.fullmatch(r"[\u4e00-\u9fff]{4}", a)]
         if invalid:
             raise ValueError(f"以下别名必须恰好是4个中文汉字：{'、'.join(invalid)}")
-        # 从第一个别名提取固定字（前缀模式取前两字，后缀模式取后两字）
-        affix = raw_aliases[0][:2] if self.alias_mode == "prefix" else raw_aliases[0][2:]
-        # 校验所有别名固定字必须相同（mjs端要求同一批候选必须同一个前缀/后缀）
-        diff_affix = [a for a in raw_aliases if (a[:2] if self.alias_mode == "prefix" else a[2:]) != affix]
-        if diff_affix:
-            mode_label = "前两字" if self.alias_mode == "prefix" else "后两字"
-            raise ValueError(f"同一批别名的{mode_label}必须相同（当前为「{affix}」），不同请分批申请：{'、'.join(diff_affix)}")
-        validated = raw_aliases
+        unique = list(dict.fromkeys(raw_aliases))
+        if len(unique) != len(raw_aliases):
+            dup = [a for a in raw_aliases if raw_aliases.count(a) > 1]
+            raise ValueError(f"同一批别名不可重复：{'、'.join(dict.fromkeys(dup))}")
+        validated = unique
+        # 固定字仅用于任务文件展示/兼容旧字段，手动候选在 mjs 侧不校验固定字
+        affix = validated[0][:2] if self.alias_mode == "prefix" else validated[0][2:]
         # 3. 确保任务存在
         task = self.add_task(identifier)
         # 4. 确保有剧目信息
@@ -587,6 +586,7 @@ class StationCore:
             "book_id": book_id,
             "alias_prefix": affix,
             "alias_mode": self.alias_mode,
+            "manual": True,  # 手动别名：mjs 跳过固定字校验，按提供的原样申请
             "status": "queued",
             "current_index": 0,
             "candidate_rows": rows,
@@ -679,6 +679,7 @@ class StationCore:
                 "book_id": book_id,
                 "alias_prefix": affix,
                 "alias_mode": self.alias_mode,
+                "manual": True,  # 手动别名：mjs 跳过固定字校验，按提供的原样申请
                 "status": "queued",
                 "current_index": 0,
                 "candidate_rows": rows,
@@ -997,19 +998,17 @@ class StationCore:
         if task.manual_alias and (task.manual_alias_names or task.manual_alias_name):
             aliases = task.manual_alias_names if task.manual_alias_names else [task.manual_alias_name.strip()]
             aliases = [a.strip() for a in aliases if a.strip()]
-            # 手动别名不被前缀后缀限制，直接使用；但必须恰好4个中文字（mjs端要求）
+            # 手动别名不受前缀/后缀模式限制，按提供的原样使用；但必须恰好4个中文字且互不重复（mjs端/平台要求）
             invalid = [a for a in aliases if not re.fullmatch(r"[\u4e00-\u9fff]{4}", a)]
             if invalid:
                 raise ValueError(f"以下手动别名必须恰好是4个中文汉字：{'、'.join(invalid)}")
-            # 从第一个别名自动提取固定字（前缀模式取前两字，后缀模式取后两字）
+            unique = list(dict.fromkeys(aliases))
+            if len(unique) != len(aliases):
+                dup = [a for a in aliases if aliases.count(a) > 1]
+                raise ValueError(f"同一批手动别名不可重复：{'、'.join(dict.fromkeys(dup))}")
+            aliases = unique
+            # 固定字仅用于任务文件展示/兼容旧字段，手动候选在 mjs 侧不校验固定字
             affix = aliases[0][:2] if self.alias_mode == "prefix" else aliases[0][2:]
-            # 校验所有别名固定字必须相同（mjs端要求同一批候选必须同一个前缀/后缀）
-            diff_affix = [a for a in aliases if (a[:2] if self.alias_mode == "prefix" else a[2:]) != affix]
-            if diff_affix:
-                mode_label = "前两字" if self.alias_mode == "prefix" else "后两字"
-                raise ValueError(f"同一批手动别名的{mode_label}必须相同（当前为「{affix}」），不同请分批申请：{'、'.join(diff_affix)}")
-            # 去重
-            aliases = list(dict.fromkeys(aliases))
             # 写入三端别名任务.json
             import json as _json
             info_dir = Path(task.info_file).parent
@@ -1024,6 +1023,7 @@ class StationCore:
                 "book_id": book_id,
                 "alias_prefix": affix,
                 "alias_mode": self.alias_mode,
+                "manual": True,  # 手动别名：mjs 跳过固定字校验，按提供的原样申请
                 "status": "queued",
                 "current_index": 0,
                 "candidate_rows": rows,
