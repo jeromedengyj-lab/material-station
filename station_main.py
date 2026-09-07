@@ -181,6 +181,7 @@ def main() -> int:
             self.book_input = QLineEdit()
             self.book_input.setPlaceholderText("输入 BookID（16~20位数字）或剧名，回车添加")
             self.book_input.returnPressed.connect(self._add_task)
+            self._pending_episodes = 0  # 单张识图暂存的集数（跟随该任务，作为识别辅助）
             top.addWidget(self.book_input, 1)
             add_btn = QPushButton("添加任务")
             add_btn.clicked.connect(self._add_task)
@@ -208,14 +209,6 @@ def main() -> int:
             self.type_combo.setCurrentIndex({"manju": 1, "wangwen": 2, "duanju": 3}.get(core.content_type, 0))
             self.type_combo.currentIndexChanged.connect(self._on_type_changed)
             top.addWidget(self.type_combo)
-            top.addWidget(QLabel("集数："))
-            self.episodes_input = QLineEdit()
-            self.episodes_input.setPlaceholderText("可选，同名区分")
-            self.episodes_input.setFixedWidth(84)
-            self.episodes_input.editingFinished.connect(self._on_episodes_changed)
-            if core.expected_episodes > 0:
-                self.episodes_input.setText(str(core.expected_episodes))
-            top.addWidget(self.episodes_input)
             ocr_btn = QPushButton("识图添加")
             ocr_btn.setToolTip("选择剧图，识别图中的剧名/集数/标签后填入上方（可修正），再点「添加任务」")
             ocr_btn.clicked.connect(self._ocr_add)
@@ -334,17 +327,6 @@ def main() -> int:
             core.set_content_type(key)
             self._append_log(f"内容类型：{['不限', '漫剧', '网文', '短剧'][index]}（同名时按此标签精确匹配；不限=不按类型过滤）")
 
-        def _on_episodes_changed(self) -> None:
-            text = self.episodes_input.text().strip()
-            if not text:
-                core.set_expected_episodes(0)
-                return
-            try:
-                core.set_expected_episodes(int(text))
-                self._append_log(f"期望集数：{core.expected_episodes} 集（同名同标签时按此精确区分）")
-            except ValueError:
-                QMessageBox.warning(self, "集数无效", "请输入整数集数")
-
         def _ocr_add(self) -> None:
             file_paths, _ = QFileDialog.getOpenFileNames(
                 self, "选择剧图（支持多选批量识别添加）",
@@ -364,8 +346,8 @@ def main() -> int:
                         QMessageBox.warning(self, "未识别到有效剧名", "图片文字不清晰或为乱码，请改用 BookID 或剧名手动输入")
                         return
                     self.book_input.setText(title)
-                    if meta["episodes"]:
-                        self.episodes_input.setText(str(meta["episodes"]))
+                    # 集数暂存（跟着这个识图任务走，添加任务时写入任务级；不设全局输入框）
+                    self._pending_episodes = meta["episodes"] or 0
                     # 内容类型不回填：它是用户主动选择（识图/搜索的定位条件），避免识别词覆盖
                     tip = f"识图完成：剧名「{title}」"
                     if meta["episodes"]:
@@ -407,12 +389,12 @@ def main() -> int:
             if not value:
                 return
             try:
-                # 当前下拉/输入框的值应用到【本次添加的任务】（任务级，不写死全局）
+                # 内容类型取当前下拉值（用户主动选择）；集数用识图暂存值（跟着识图任务走，不设输入框）
                 type_key = ["", "manju", "wangwen", "duanju"][self.type_combo.currentIndex()]
-                episodes_text = self.episodes_input.text().strip()
-                episodes = int(episodes_text) if episodes_text else None
+                episodes = self._pending_episodes or None
                 task = core.add_task(value, content_type=type_key, expected_episodes=episodes)
                 self.book_input.clear()
+                self._pending_episodes = 0
                 label = f"BookID {task.input_value}" if task.input_type == "book_id" else f"剧名「{task.input_value}」"
                 extra = []
                 if task.content_type:
