@@ -16,3 +16,7 @@ data/
 # 系统
 Thumbs.db
 .DS_Store
+
+push_*.log
+push_result*.log
+push_log.txt
