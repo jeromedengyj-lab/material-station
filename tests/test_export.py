@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from station_main import alias_summary, export_tasks_to_csv
+from station_main import alias_summary, export_tasks_to_csv, merge_rows_into_csv
 
 
 def test_export_tasks_to_csv_writes_all_rows(tmp_path: Path) -> None:
@@ -110,3 +110,68 @@ def test_alias_summary_none() -> None:
     approved, summary = alias_summary(None)
     assert approved == ""
     assert summary == ""
+
+
+# ---------- 始终同一表格：累积合并 ----------
+
+def _row(input_value: str, title: str, status: str = "完成", alias: str = "") -> dict:
+    return {
+        "input_value": input_value,
+        "book_id": input_value,
+        "title": title,
+        "status_text": status,
+        "detail": "",
+        "alias": alias,
+        "alias_result": f"{alias}=成功" if alias else "",
+        "time_text": "2026-09-08 10:00:00",
+    }
+
+
+def _read_rows(path: Path) -> list[list[str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.reader(handle))
+
+
+def test_merge_rows_into_csv_creates_when_missing(tmp_path: Path) -> None:
+    target = tmp_path / "汇总.csv"
+    added, updated = merge_rows_into_csv([_row("a", "剧A", alias="年年甲"), _row("b", "剧B")], target)
+    assert (added, updated) == (2, 0)
+    rows = _read_rows(target)
+    assert rows[0] == ["序号", "输入", "剧名", "状态", "详情", "别名", "别名结果", "时间"]
+    assert [r[1] for r in rows[1:]] == ["a", "b"]
+    assert rows[1][5] == "年年甲"
+
+
+def test_merge_rows_into_csv_updates_existing(tmp_path: Path) -> None:
+    target = tmp_path / "汇总.csv"
+    merge_rows_into_csv([_row("a", "剧A", alias="年年甲")], target)
+    # 第二批：a 状态/别名更新 + 新任务 c
+    added, updated = merge_rows_into_csv(
+        [_row("a", "剧A", status="需人工处理", alias="年年乙"), _row("c", "剧C")], target
+    )
+    assert (added, updated) == (1, 1)
+    rows = _read_rows(target)
+    assert len(rows) == 3  # 表头 + 2 行（不重复）
+    assert rows[1][3] == "需人工处理"
+    assert rows[1][5] == "年年乙"
+    assert rows[2][1] == "c"
+    assert rows[1][0] == "1" and rows[2][0] == "2"  # 序号连续
+
+
+def test_merge_rows_into_csv_appends_without_touching_others(tmp_path: Path) -> None:
+    target = tmp_path / "汇总.csv"
+    merge_rows_into_csv([_row("a", "剧A"), _row("b", "剧B")], target)
+    added, updated = merge_rows_into_csv([_row("d", "剧D")], target)
+    assert (added, updated) == (1, 0)
+    rows = _read_rows(target)
+    assert [r[1] for r in rows[1:]] == ["a", "b", "d"]
+    assert rows[3][2] == "剧D"
+
+
+def test_merge_rows_into_csv_preserves_existing_file_when_unreadable(tmp_path: Path) -> None:
+    target = tmp_path / "汇总.csv"
+    target.write_text("\xff\xfe\x00\x01\x02", encoding="latin-1")  # 非法内容
+    added, updated = merge_rows_into_csv([_row("a", "剧A")], target)
+    assert (added, updated) == (1, 0)
+    rows = _read_rows(target)
+    assert rows[1][1] == "a"

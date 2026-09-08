@@ -219,6 +219,8 @@ class StationCore:
         self.download_only = False  # True=只下载不申请别名
         self.alias_only = False  # True=跳过下载直接申请别名（需已有剧目信息）
         self.manual_mode = False  # True=手动别名模式：新任务不自动执行，等用户手动输入别名
+        self.table_mode = "single"  # "single"=始终同一表格（累积追加去重）；"per_batch"=每批一个新表格
+        self.table_path = ""        # single 模式固定的表格文件路径（首次导出时选择并记住）
         self._ensure_dirs()
         self._load_state()
         # 程序退出时：终止登记中的子进程（防 node 孤儿持锁）+ 删除角色锁
@@ -329,6 +331,12 @@ class StationCore:
         saved_content_type = data.get("content_type") if isinstance(data, dict) else None
         if isinstance(saved_content_type, str) and saved_content_type in ("manju", "wangwen", "duanju", ""):
             self.content_type = saved_content_type
+        saved_table_mode = data.get("table_mode") if isinstance(data, dict) else None
+        if isinstance(saved_table_mode, str) and saved_table_mode in ("single", "per_batch"):
+            self.table_mode = saved_table_mode
+        saved_table_path = data.get("table_path") if isinstance(data, dict) else None
+        if isinstance(saved_table_path, str):
+            self.table_path = saved_table_path.strip()
         saved_episodes = data.get("expected_episodes") if isinstance(data, dict) else None
         if isinstance(saved_episodes, int) and saved_episodes >= 0:
             self.expected_episodes = saved_episodes
@@ -340,6 +348,10 @@ class StationCore:
                 task.detail = "上次运行中断，已恢复排队，可继续"
                 if task.book_id not in self._queue:
                     self._queue.append(task.book_id)
+        self._save_state()
+
+    def save_state(self) -> None:
+        """立即持久化当前配置与任务状态（UI 变更时调用）。"""
         self._save_state()
 
     def _save_state(self) -> None:
@@ -356,6 +368,8 @@ class StationCore:
             "manual_mode": self.manual_mode,
             "content_type": self.content_type,
             "expected_episodes": self.expected_episodes,
+            "table_mode": self.table_mode,
+            "table_path": self.table_path,
             "tasks": {book_id: task.to_dict() for book_id, task in self._tasks.items()},
         }
         path = self._state_file()

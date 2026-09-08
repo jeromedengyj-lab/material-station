@@ -95,6 +95,63 @@ def export_tasks_to_csv(tasks: list, path: str | Path) -> int:
             ])
     return len(tasks)
 
+
+def merge_rows_into_csv(rows: list, path: str | Path) -> tuple[int, int]:
+    """把任务行累积合并进已有 CSV 表格（「始终同一表格」模式）。
+
+    已存在表格：按「输入」列去重——同一输入（同 BookID/剧名）更新该行内容，
+    新输入追加到末尾；表头保持不变，序号重新连续编号。
+    文件不存在时直接创建（等同 export_tasks_to_csv）。
+    rows: 与 export_tasks_to_csv 相同的任务行 dict。
+    返回 (新增行数, 更新行数)。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = ["序号", "输入", "剧名", "状态", "详情", "别名", "别名结果", "时间"]
+    existing: dict[str, list[str]] = {}  # 输入 → 原行（不含序号）
+    order: list[str] = []                # 保持原行顺序
+    if path.is_file():
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle)
+                first = next(reader, None)
+                for raw in reader:
+                    if not raw or not any(cell.strip() for cell in raw):
+                        continue
+                    key = raw[1] if len(raw) > 1 else ""
+                    if key not in existing:
+                        order.append(key)
+                    existing[key] = (raw + [""] * (len(header) - len(raw)))[1:len(header)]
+        except (OSError, UnicodeDecodeError):
+            existing, order = {}, []
+
+    added = updated = 0
+    for task in rows:
+        display_input = str(task.get("input_value") or task.get("book_id") or "")
+        values = [
+            display_input,
+            task.get("title") or "-",
+            task.get("status_text") or task.get("status") or "",
+            task.get("detail") or "",
+            task.get("alias") or "",
+            task.get("alias_result") or "",
+            task.get("time_text") or "",
+        ]
+        if display_input in existing:
+            existing[display_input] = values
+            updated += 1
+        else:
+            existing[display_input] = values
+            order.append(display_input)
+            added += 1
+
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        for number, key in enumerate(order, start=1):
+            writer.writerow([number, *existing[key]])
+    return added, updated
+
 def _tool_root() -> Path:
     configured = str(os.environ.get("MANJU_TOOL_ROOT", "") or "").strip()
     if configured:
@@ -295,6 +352,15 @@ def main() -> int:
             export_btn = QPushButton("下载到表格")
             export_btn.clicked.connect(self._export_to_table)
             top.addWidget(export_btn)
+            self.table_mode_combo = QComboBox()
+            self.table_mode_combo.addItems(["始终同一表格", "每批一个新表格"])
+            self.table_mode_combo.setCurrentIndex(0 if core.table_mode == "single" else 1)
+            self.table_mode_combo.currentIndexChanged.connect(self._on_table_mode_changed)
+            self.table_mode_combo.setToolTip(
+                "始终同一表格：所有批次累积进一个 CSV（同 BookID/剧名自动更新该行）\n"
+                "每批一个新表格：每次导出生成带时间戳的新文件"
+            )
+            top.addWidget(self.table_mode_combo)
             top.addSpacing(12)
             top.addWidget(QLabel("内容类型："))
             self.type_combo = QComboBox()
@@ -568,25 +634,24 @@ def main() -> int:
             path.mkdir(parents=True, exist_ok=True)
             os.startfile(str(path))  # noqa: S606
 
+        def _on_table_mode_changed(self, index: int) -> None:
+            core.table_mode = "single" if index == 0 else "per_batch"
+            core.save_state()
+            self._append_log(f"表格导出模式：{'始终同一表格' if index == 0 else '每批一个新表格'}")
+
         def _export_to_table(self) -> None:
             """一键把当前任务列表导出为表格（CSV，Excel 可直接打开）。
 
-            路径由用户选择；只读导出，不清除界面任务信息。
+            两种模式（顶部下拉选择）：
+            - 始终同一表格：首次选择保存路径后记住，之后每次导出累积追加去重
+              （同一 BookID/剧名更新该行，新任务追加）；删除表格文件后下次导出重新选路径。
+            - 每批一个新表格：每次弹窗选择路径，默认带时间戳新文件。
+            只读导出，不清除界面任务信息。
             """
             tasks = core.tasks
             if not tasks:
                 QMessageBox.information(self, "下载到表格", "当前没有任务可导出")
                 return
-            default_name = time.strftime("素材准备站任务_%Y%m%d_%H%M%S.csv")
-            default_dir = self._last_export_dir or str(core.data_root)
-            file_path, _ = QFileDialog.getSaveFileName(
-                self, "保存任务表格", str(Path(default_dir) / default_name),
-                "CSV 表格 (*.csv);;所有文件 (*.*)",
-            )
-            if not file_path:
-                return
-            if not file_path.lower().endswith(".csv"):
-                file_path += ".csv"
             rows = [
                 {
                     "input_value": task.input_value or "",
@@ -605,16 +670,56 @@ def main() -> int:
                 approved, summary = alias_summary(task.task_file if task.task_file else None)
                 row["alias"] = approved or (task.approved_alias or "")
                 row["alias_result"] = summary
+
+            if core.table_mode == "per_batch":
+                default_name = time.strftime("素材准备站任务_%Y%m%d_%H%M%S.csv")
+                default_dir = self._last_export_dir or str(core.data_root)
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self, "保存任务表格", str(Path(default_dir) / default_name),
+                    "CSV 表格 (*.csv);;所有文件 (*.*)",
+                )
+                if not file_path:
+                    return
+                if not file_path.lower().endswith(".csv"):
+                    file_path += ".csv"
+                try:
+                    count = export_tasks_to_csv(rows, file_path)
+                except Exception as error:  # noqa: BLE001
+                    QMessageBox.critical(self, "导出失败", f"写入表格失败：{error}")
+                    return
+                self._last_export_dir = str(Path(file_path).resolve().parent)
+                self._append_log(f"已导出 {count} 条任务到表格：{file_path}")
+                QMessageBox.information(
+                    self, "下载到表格",
+                    f"已导出 {count} 条任务\n保存位置：{file_path}\n（界面任务信息未做任何改动）",
+                )
+                return
+
+            # ---- 始终同一表格：累积追加去重 ----
+            file_path = core.table_path
+            if not file_path or not Path(file_path).is_file():
+                default_dir = self._last_export_dir or str(core.data_root)
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self, "选择汇总表格（首次）", str(Path(default_dir) / "素材准备站任务汇总.csv"),
+                    "CSV 表格 (*.csv);;所有文件 (*.*)",
+                )
+                if not file_path:
+                    return
+                if not file_path.lower().endswith(".csv"):
+                    file_path += ".csv"
+                core.table_path = file_path
+                core.save_state()
             try:
-                count = export_tasks_to_csv(rows, file_path)
+                added, updated = merge_rows_into_csv(rows, file_path)
             except Exception as error:  # noqa: BLE001
                 QMessageBox.critical(self, "导出失败", f"写入表格失败：{error}")
                 return
             self._last_export_dir = str(Path(file_path).resolve().parent)
-            self._append_log(f"已导出 {count} 条任务到表格：{file_path}")
+            self._append_log(f"已合并到汇总表格：新增 {added} 条、更新 {updated} 条 → {file_path}")
             QMessageBox.information(
                 self, "下载到表格",
-                f"已导出 {count} 条任务\n保存位置：{file_path}\n（界面任务信息未做任何改动）",
+                f"已合并到汇总表格：新增 {added} 条、更新 {updated} 条\n"
+                f"表格文件：{file_path}\n（界面任务信息未做任何改动）",
             )
 
         # ---------- 更新 ----------
