@@ -26,3 +26,5 @@ build_station_portable/
 # 安装包构建产物（大文件不入库）
 build_tools/
 
+build/
+
