@@ -430,7 +430,7 @@ try{
     if(exact.length!==1){
       const sameName=matched.byTitle.map(x=>`${x.book_name||x.name}（${bookEpisodes(x)||'未知'}集${(bookTypeLabels(x)[0]||'')?('·'+bookTypeLabels(x)[0]):''}）`).join('、');
       if(expectedEpisodes&&matched.byTitle.length)die(`原剧名匹配，但没有唯一的 ${expectedEpisodes} 集${CONTENT_TYPE_LABELS[requestedContentType]||''}结果。同名候选：${sameName}`,10);
-      die(exact.length?`发现 ${exact.length} 个同名同类型结果，已停止以避免下错。同名候选：${sameName}`:`无唯一精确匹配（要求类型：${CONTENT_TYPE_LABELS[requestedContentType]||'不限'}）。候选：${books.slice(0,15).map(x=>x.book_name||x.name).filter(Boolean).join('、')||'无'}`,10);
+      die(exact.length?`发现 ${exact.length} 个同名同类型结果，已停止以避免下错。同名候选：${sameName}`:`结果里没有这部剧（未找到精确匹配）。候选：${books.slice(0,15).map(x=>x.book_name||x.name).filter(Boolean).join('、')||'无'}`,10);
     }
  }
  const book=exact[0];
