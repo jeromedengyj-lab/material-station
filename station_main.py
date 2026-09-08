@@ -104,6 +104,24 @@ def _tool_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _license_required(data_dir: Path) -> bool:
+    """是否必须激活才能使用。
+
+    优先级：data\\licensed_mode.flag（已安装/已激活）→ 环境变量 MANJU_FORCE_LICENSE
+    → 构建常量 _build_config.FORCE_LICENSE（安装包资源为 True，绿色版为 False）。
+    """
+    if (data_dir / "licensed_mode.flag").is_file():
+        return True
+    env = str(os.environ.get("MANJU_FORCE_LICENSE", "") or "").strip().lower()
+    if env in ("1", "true", "yes"):
+        return True
+    try:
+        from _build_config import FORCE_LICENSE  # type: ignore[import-not-found]
+        return bool(FORCE_LICENSE)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _ensure_license(data_dir: Path) -> bool:
     """安装版激活校验：核对 本机设备码 + 激活文件密钥，不匹配弹激活窗口。
 
@@ -635,8 +653,9 @@ def main() -> int:
             event.accept()
 
     window = StationWindow()
-    # 安装版激活校验（data\licensed_mode.flag 存在时）：绿色版无标记直接运行，不受影响
-    if (tool_root / "data" / "licensed_mode.flag").is_file() and not _ensure_license(tool_root / "data"):
+    # 激活校验：安装版标记 或 强制授权构建（安装包内嵌的强制版）→ 必须激活；
+    # 绿色版（默认构建）无标记直接运行，不受影响
+    if _license_required(tool_root / "data") and not _ensure_license(tool_root / "data"):
         return 1
     window.show()
     return app.exec()

@@ -25,15 +25,17 @@ def mini_zip(tmp_path: Path) -> Path:
     return zip_path
 
 
-def test_install_worker_extracts(mini_zip: Path, tmp_path: Path) -> None:
-    """InstallWorker 完整解压迷你资源包。"""
+def test_install_worker_extracts(mini_zip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """InstallWorker 完整解压迷你资源包（内嵌/旁挂 zip 均可）。"""
     target = tmp_path / "installed"
     events: list[tuple] = []
 
     def progress(done: int, total: int, current: str) -> None:
         events.append((done, total, current))
 
-    worker = InstallWorker(mini_zip, target, progress)
+    # 开发模式：_open_resources 读旁挂 resources.zip → 用迷你包替换
+    monkeypatch.setattr("setup_main._open_resources", lambda: zipfile.ZipFile(mini_zip))
+    worker = InstallWorker(target, progress)
     worker.run()
     assert not worker.error
     assert (target / "素材准备站.exe").is_file()

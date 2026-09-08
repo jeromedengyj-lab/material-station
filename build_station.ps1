@@ -1,6 +1,14 @@
-﻿# 素材准备站 - 绿色文件夹构建脚本（独立仓库版）
-# 用法：powershell -ExecutionPolicy Bypass -File build_station.ps1
-# 产物：build_station_portable\素材准备站\（整个文件夹拷到目标设备即用）
+﻿# 素材准备站 - 构建脚本（独立仓库版）
+# 用法：
+#   绿色版：    powershell -ExecutionPolicy Bypass -File build_station.ps1
+#   安装包版：  powershell -ExecutionPolicy Bypass -File build_station.ps1 -ForceLicense -OutName build_station_install
+# 绿色版产物：build_station_portable\素材准备站\（整个文件夹拷到目标设备即用，免激活）
+# 安装包版产物：build_station_install\素材准备站\（exe 强制授权，必须密钥才能使用，
+#               供 setup 单文件安装包内嵌；直接解压/拷贝也绕不过授权）
+param(
+    [switch]$ForceLicense,
+    [string]$OutName = "build_station_portable"
+)
 $ErrorActionPreference = "Stop"
 
 $root = "D:\漫剧剪辑工具\material-station"
@@ -8,11 +16,16 @@ $venvPython = "D:\漫剧剪辑工具\app\.venv\Scripts\python.exe"
 $spec = "$root\build_station.spec"
 $work = "$root\build_station_work"
 $dist = "$root\build_station_dist"
-$portable = "$root\build_station_portable"
+$portable = "$root\$OutName"
 $stage = "$portable\素材准备站"
 
 $ollamaSrc = "D:\漫剧剪辑工具\素材准备站\runtime\ollama"
 $modelsSrc = "D:\漫剧剪辑工具\素材准备站\models\ollama"
+
+# 构建常量：安装包版强制授权（绿色版豁免）
+$cfgValue = if ($ForceLicense) { "True" } else { "False" }
+Set-Content -Path "$root\_build_config.py" -Value "FORCE_LICENSE = $cfgValue" -Encoding UTF8
+Write-Host "构建模式：$($(if ($ForceLicense) {'强制授权版（安装包）'} else {'绿色版（免激活）'}))" -ForegroundColor Cyan
 
 Write-Host "== 1/5 PyInstaller 构建 ==" -ForegroundColor Cyan
 Push-Location $root

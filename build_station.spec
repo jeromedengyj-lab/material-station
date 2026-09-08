@@ -35,6 +35,7 @@ a = Analysis(
         "station_core",
         "station_main",
         "station_alias",
+        "_build_config",
     ],
     hookspath=[],
     hooksconfig={},

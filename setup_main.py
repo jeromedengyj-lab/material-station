@@ -1,15 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""素材准备站 · 安装程序（目标设备使用）。
+"""素材准备站 · 单文件安装程序（目标设备使用）。
 
 流程：
   1) 欢迎页：自动提取本机设备码（一键复制），输入授权密钥并校验；
   2) 选择安装位置（默认 D:\\素材准备站）；
-  3) 解压 resources.zip 安装（进度显示，几分钟）；
+  3) 从安装包自身内嵌资源解压安装（进度显示，约 1-2 分钟）；
   4) 创建桌面/开始菜单快捷方式 + 写入激活信息 + 安装标记；
   5) 完成，可立即启动。
 
-资源要求：与 setup.exe 同目录放置 resources.zip（绿色版内容，不含 data）。
-安装版激活：程序启动时校验本机设备码与激活文件密钥；绿色版无安装标记则直接运行。
+单文件形式：build_installer.ps1 将「setup.exe（安装逻辑）」与
+「resources 安装资源」合并为一个自包含 exe（zipfile 支持前导字节，
+安装程序用 zipfile.ZipFile(sys.executable) 直接读取内嵌资源）。
+内嵌资源为强制授权版（FORCE_LICENSE=True）：无论解压还是安装，
+程序都必须在目标设备上激活后才能使用，无法绕过。
 """
 
 from __future__ import annotations
@@ -34,8 +37,12 @@ def _bundle_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _resources_zip() -> Path:
-    return _bundle_dir() / RESOURCE_ZIP_NAME
+def _open_resources() -> zipfile.ZipFile:
+    """打开安装资源：打包后从自身 exe 内嵌读取；开发模式读旁挂 zip。"""
+    if getattr(sys, "frozen", False):
+        # 自包含 exe = PyInstaller 头 + 内嵌 zip，zipfile 自动定位尾部 EOCD
+        return zipfile.ZipFile(sys.executable)
+    return zipfile.ZipFile(_bundle_dir() / RESOURCE_ZIP_NAME)
 
 
 def _total_uncompressed(zf: zipfile.ZipFile) -> int:
@@ -45,16 +52,15 @@ def _total_uncompressed(zf: zipfile.ZipFile) -> int:
 class InstallWorker(threading.Thread):
     """后台解压安装：向进度回调报告 (done, total, current_file)。"""
 
-    def __init__(self, zip_path: Path, target: Path, progress):
+    def __init__(self, target: Path, progress):
         super().__init__(daemon=True)
-        self.zip_path = zip_path
         self.target = target
         self.progress = progress
         self.error: str = ""
 
     def run(self) -> None:  # noqa: C901
         try:
-            with zipfile.ZipFile(self.zip_path, "r") as zf:
+            with _open_resources() as zf:
                 total = _total_uncompressed(zf)
                 done = 0
                 for info in zf.infolist():
@@ -287,14 +293,16 @@ def _run_gui() -> int:
             )
             if answer != QMessageBox.Yes:
                 return
-        zip_path = _resources_zip()
-        if not zip_path.is_file():
-            QMessageBox.critical(win, "缺少安装资源", f"未找到 {zip_path.name}，请将其与安装程序放在同一目录。")
+        try:
+            probe = _open_resources()
+            probe.close()
+        except Exception:  # noqa: BLE001
+            QMessageBox.critical(win, "缺少安装资源", "安装包内未找到安装资源，文件可能已损坏。")
             return
         target.mkdir(parents=True, exist_ok=True)
         install_btn.setEnabled(False)
         stack.setCurrentIndex(2)
-        worker = InstallWorker(zip_path, target, on_progress)
+        worker = InstallWorker(target, on_progress)
         worker_ref["worker"] = worker
         worker.start()
         threading.Thread(target=wait_install, args=(target,), daemon=True).start()
@@ -338,8 +346,6 @@ def _run_gui() -> int:
 
 
 def main() -> int:
-    if not _resources_zip().is_file():
-        print(f"警告：未找到 {RESOURCE_ZIP_NAME}（与安装程序同目录），安装将无法进行。")
     return _run_gui()
 
 
