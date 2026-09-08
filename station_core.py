@@ -61,9 +61,16 @@ def _is_book_id(value: str) -> bool:
 
 
 def _normalize_title(value: str) -> str:
-    """剧名归一化：NFKC + 去全部空白，与 mjs 端 normalizeTitle 对齐。"""
+    """剧名归一化：NFKC + 小写 + 去空白 + 去全半角标点。
+
+    中英文逗号/冒号/括号/书名号等全半角标点视为等价（搜索结果可能用
+    中文标点，用户输入可能用英文标点），大小写不敏感。与 mjs 端
+    normalizeTitle 对齐，用于剧名定位与任务查重。
+    """
+    import re as _re
     import unicodedata
-    return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+    text = unicodedata.normalize("NFKC", str(value or "")).lower()
+    return _re.sub(r"[\s,，.。!！?？:：;；、《》「」『』（）()【】\[\]~～\-—_\"'“”‘’…·]+", "", text)
 
 
 def _safe_filename(value: str) -> str:
@@ -175,6 +182,7 @@ class StationTask:
     expected_episodes: int = 0      # 期望集数（同名同标签时精确区分）；0=不限制
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    auto_retry_count: int = 0  # 候选全部未通过后自动换新候选重试的轮数（上限3轮，防死循环）
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -432,7 +440,21 @@ class StationCore:
             raise ValueError("剧名过长（最多 100 字）")
         # 任务key：有alias_key时用 剧名:别名（独立任务），否则用 剧名（多候选任务）
         task_key = f"title:{identifier}:{alias_key}" if alias_key else f"title:{identifier}"
-        existing = self._tasks.get(task_key)
+        # 查重：按规范化剧名（中英文标点等价、大小写不敏感）比较，
+        # 兼容旧任务 key（原始剧名），避免同一部剧因标点形式不同被重复添加
+        norm_id = _normalize_title(identifier)
+        existing = None
+        if alias_key:
+            existing = self._tasks.get(task_key)
+        else:
+            for _task in self._tasks.values():
+                if (_task.input_type == "title"
+                        and _normalize_title(_task.input_value) == norm_id
+                        and _task.status not in (STATUS_DONE, STATUS_FAILED)):
+                    existing = _task
+                    break
+            if existing is None:
+                existing = self._tasks.get(task_key)
         if existing and existing.status not in (STATUS_DONE, STATUS_FAILED):
             raise ValueError(f"剧名「{identifier}」已在任务列表中")
         task = StationTask(book_id=task_key, input_type="title", input_value=identifier)
@@ -1278,10 +1300,26 @@ class StationCore:
 
         # 根据 fix_affix 决定是否限制前缀/后缀：选上且有值=用指定固定字，否则=AI自由生成4个字
         affix = self.alias_prefix if (self.fix_affix and self.alias_prefix) else ""
+        # excluded：排除已采用的别名 + 本任务历史上已尝试过的所有候选（失败/被拒的不再生成）
+        excluded: set[str] = set()
+        if str(task.approved_alias or "").strip():
+            excluded.add(str(task.approved_alias).strip())
+        if task.task_file:
+            try:
+                old_state = self._read_json(Path(task.task_file))
+                if isinstance(old_state, dict):
+                    for name in (old_state.get("candidates") or []):
+                        if str(name or "").strip():
+                            excluded.add(str(name).strip())
+                    for row in (old_state.get("history") or []):
+                        if isinstance(row, dict) and str(row.get("alias") or "").strip():
+                            excluded.add(str(row.get("alias")).strip())
+            except Exception:  # noqa: BLE001
+                pass
         candidates = generate_alias_candidates(
             title, intro, count=3, prefix=affix,
             mode=self.alias_mode,
-            excluded={str(task.approved_alias or "").strip()} if task.approved_alias else None,
+            excluded=excluded or None,
             shared_root=self.data_root,
         )
         project = SimpleNamespace(
@@ -1344,9 +1382,35 @@ class StationCore:
             task.error = reason
             task.detail = f"{reason}，已保留进度，请到平台处理后手动重试该任务"
         elif return_code == _ALIAS_EXIT_NEED_MORE:
+            # 候选全部未通过：自动换新候选重试（手动别名除外，最多3轮防死循环），
+            # 超过上限才转人工——对应"审核失败的自动加一个新任务返回去再申请"
+            if not task.manual_alias and (task.auto_retry_count or 0) < 3:
+                task.auto_retry_count = (task.auto_retry_count or 0) + 1
+                round_no = task.auto_retry_count
+                task.status = STATUS_GENERATING
+                task.detail = f"第{round_no}轮候选全部未通过三端，自动生成新候选重试"
+                task.updated_at = time.time()
+                self._save_state()
+                self._emit(task.book_id, task.status, task.detail)
+                try:
+                    self._generate(task)
+                except Exception as error:  # noqa: BLE001
+                    task.status = STATUS_WAITING_MANUAL
+                    task.error = str(error)
+                    task.detail = f"自动生成新候选失败：{error}"
+                    task.updated_at = time.time()
+                    self._save_state()
+                    self._emit(task.book_id, task.status, task.detail)
+                    return
+                if task.status == STATUS_GENERATING:
+                    self._apply(task, submit_only=True)
+                return
             task.status = STATUS_WAITING_MANUAL
             task.error = "候选别名均未通过三端审核"
-            task.detail = "现有候选均未三端通过，需要重新生成候选后重试"
+            task.detail = (
+                f"已自动重试{task.auto_retry_count}轮仍无候选通过三端，请人工处理"
+                if task.auto_retry_count else "现有候选均未三端通过，需要重新生成候选后重试"
+            )
         else:
             task.status = STATUS_FAILED
             task.error = self._read_tail(log_path, 12)

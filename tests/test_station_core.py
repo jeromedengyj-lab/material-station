@@ -724,3 +724,83 @@ def test_generate_with_manual_alias_skips_ai(core: StationCore, monkeypatch: pyt
     data = _json.loads(Path(task.task_file).read_text(encoding="utf-8"))
     assert data["candidates"] == ["知夏藏锋"]
     assert task.status == "generating"
+
+# ---------- 剧名标点等价 / 大小写不敏感 / 自动重试 ----------
+
+def test_normalize_title_punctuation_and_case() -> None:
+    from station_core import _normalize_title
+    assert _normalize_title("妖妃蛊惑人心,暴君他失控了") == "妖妃蛊惑人心暴君他失控了"
+    assert _normalize_title("妖妃蛊惑人心，暴君他失控了") == "妖妃蛊惑人心暴君他失控了"
+    assert _normalize_title("妖妃蛊惑人心:暴君他失控了") == "妖妃蛊惑人心暴君他失控了"
+    assert _normalize_title("妖妃蛊惑人心：暴君他失控了") == "妖妃蛊惑人心暴君他失控了"
+    assert _normalize_title("《妖妃传》") == "妖妃传"
+    assert _normalize_title("ABC Hero 2026") == _normalize_title("abc hero 2026")
+    # 中英文逗号/冒号全等价
+    eq = {"妖妃蛊惑人心,暴君他失控了", "妖妃蛊惑人心，暴君他失控了",
+          "妖妃蛊惑人心:暴君他失控了", "妖妃蛊惑人心：暴君他失控了"}
+    assert len({_normalize_title(x) for x in eq}) == 1
+
+
+def test_add_task_title_dedup_punctuation_insensitive(core: StationCore) -> None:
+    core.add_task("妖妃蛊惑人心,暴君他失控了")
+    # 同一部剧（中英文逗号不同）不可重复添加
+    with pytest.raises(ValueError):
+        core.add_task("妖妃蛊惑人心，暴君他失控了")
+
+
+def test_apply_need_more_auto_retries_then_manual(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """候选全部未通过（NEED_MORE）→ 自动生成新候选并再次申请，最多3轮后转人工。"""
+    from station_core import _ALIAS_EXIT_NEED_MORE
+    task = core.add_book_id(BOOK_ID)
+    task_dir = core.data_root / "选剧文件夹" / "原剧视频" / "示例剧"
+    _write_drama_info(task_dir, BOOK_ID)
+    task_file = task_dir / "剧目信息" / "三端别名任务.json"
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    task_file.write_text(json.dumps({
+        "version": 2, "status": "running",
+        "candidates": ["知夏甲", "知夏乙"],
+        "history": [{"alias": "知夏甲", "result": "rejected"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    task.task_file = str(task_file)
+    task.status = STATUS_APPLYING
+    log_file = core._log_file(task, "alias")
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("mjs 输出\n", encoding="utf-8")
+    core._run_process = lambda *args, **kwargs: (_ALIAS_EXIT_NEED_MORE, "")  # type: ignore[method-assign]
+    gen_calls: list[str] = []
+
+    def fake_generate(t: object) -> None:
+        gen_calls.append(str(getattr(t, "book_id", "")))
+        setattr(t, "status", STATUS_GENERATING)
+
+    monkeypatch.setattr(core, "_generate", fake_generate)
+    core._apply(task)
+    assert len(gen_calls) == 3  # 自动重试3轮
+    assert task.auto_retry_count == 3
+    assert task.status == STATUS_WAITING_MANUAL
+    assert "自动重试3轮" in task.detail
+
+
+def test_apply_need_more_manual_alias_not_auto_retried(core: StationCore) -> None:
+    """手动别名任务候选全部失败：不自动换候选（用户指定别名），直接转人工。"""
+    from station_core import _ALIAS_EXIT_NEED_MORE
+    task = core.add_book_id(BOOK_ID)
+    task.manual_alias = True
+    task_dir = core.data_root / "选剧文件夹" / "原剧视频" / "示例剧"
+    _write_drama_info(task_dir, BOOK_ID)
+    task_file = task_dir / "剧目信息" / "三端别名任务.json"
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    task_file.write_text(json.dumps({
+        "version": 2, "status": "running",
+        "candidates": ["妖妃蛊惑", "暴君失控"],
+        "history": [],
+    }, ensure_ascii=False), encoding="utf-8")
+    task.task_file = str(task_file)
+    task.status = STATUS_APPLYING
+    log_file = core._log_file(task, "alias")
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("mjs 输出\n", encoding="utf-8")
+    core._run_process = lambda *args, **kwargs: (_ALIAS_EXIT_NEED_MORE, "")  # type: ignore[method-assign]
+    core._apply(task)
+    assert task.auto_retry_count == 0
+    assert task.status == STATUS_WAITING_MANUAL
