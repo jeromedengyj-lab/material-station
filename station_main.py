@@ -115,7 +115,7 @@ def _ensure_license(data_dir: Path) -> bool:
         QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QMessageBox,
     )
-    from license_utils import get_device_code, verify_key
+    from license_utils import get_device_code, key_status
 
     device_code = get_device_code()
     license_file = data_dir / "license.dat"
@@ -124,10 +124,8 @@ def _ensure_license(data_dir: Path) -> bool:
         saved = _json.loads(license_file.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         saved = {}
-    if (
-        str(saved.get("device_code", "")).upper() == device_code
-        and verify_key(device_code, str(saved.get("key", "")))
-    ):
+    saved_status, saved_expiry = key_status(device_code, str(saved.get("key", "")))
+    if str(saved.get("device_code", "")).upper() == device_code and saved_status == "valid":
         return True
 
     dialog = QDialog()
@@ -157,8 +155,12 @@ def _ensure_license(data_dir: Path) -> bool:
 
     def try_activate() -> None:
         key = key_edit.text().strip()
-        if not verify_key(device_code, key):
-            state_label.setText("❌ 密钥不匹配，请核对设备码与密钥")
+        status, expiry = key_status(device_code, key)
+        if status == "invalid":
+            state_label.setText("❌ 密钥无效，请核对设备码与密钥是否对应")
+            return
+        if status == "expired":
+            state_label.setText(f"❌ 密钥已过期（{expiry} 到期），请向授权方获取新密钥")
             return
         try:
             license_file.write_text(

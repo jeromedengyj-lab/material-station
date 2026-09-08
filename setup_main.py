@@ -21,7 +21,7 @@ import threading
 import zipfile
 from pathlib import Path
 
-from license_utils import get_device_code, verify_key
+from license_utils import get_device_code, key_status
 
 APP_NAME = "素材准备站"
 DEFAULT_INSTALL_DIR = Path("D:/素材准备站")
@@ -239,12 +239,17 @@ def _run_gui() -> int:
 
     def check_key() -> None:
         key = key_edit.text().strip()
-        if verify_key(device_code, key):
-            key_state.setText("✅ 密钥有效")
+        status, expiry = key_status(device_code, key)
+        if status == "valid":
+            key_state.setText("✅ 密钥有效" + (f"（{expiry} 到期）" if expiry else "（永久）"))
             key_state.setStyleSheet("color: #1a7f37;")
             next1.setEnabled(True)
+        elif status == "expired":
+            key_state.setText(f"❌ 密钥已过期（{expiry} 到期），请向授权方获取新密钥")
+            key_state.setStyleSheet("color: #c62828;")
+            next1.setEnabled(False)
         else:
-            key_state.setText("❌ 密钥不匹配，请检查设备码与密钥是否对应")
+            key_state.setText("❌ 密钥无效，请检查设备码与密钥是否对应")
             key_state.setStyleSheet("color: #c62828;")
             next1.setEnabled(False)
 
