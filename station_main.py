@@ -104,6 +104,80 @@ def _tool_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _ensure_license(data_dir: Path) -> bool:
+    """安装版激活校验：核对 本机设备码 + 激活文件密钥，不匹配弹激活窗口。
+
+    绿色版（无 licensed_mode.flag）不调用本函数，保持原行为。
+    """
+    import json as _json
+
+    from PySide6.QtWidgets import (
+        QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+        QMessageBox,
+    )
+    from license_utils import get_device_code, verify_key
+
+    device_code = get_device_code()
+    license_file = data_dir / "license.dat"
+    saved: dict = {}
+    try:
+        saved = _json.loads(license_file.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        saved = {}
+    if (
+        str(saved.get("device_code", "")).upper() == device_code
+        and verify_key(device_code, str(saved.get("key", "")))
+    ):
+        return True
+
+    dialog = QDialog()
+    dialog.setWindowTitle("素材准备站 · 激活")
+    dialog.resize(560, 220)
+    layout = QVBoxLayout(dialog)
+    layout.addWidget(QLabel("本机设备码（复制后向授权方获取密钥）："))
+    code_row = QHBoxLayout()
+    code_edit = QLineEdit(device_code)
+    code_edit.setReadOnly(True)
+    code_edit.setFixedWidth(300)
+    copy_btn = QPushButton("复制设备码")
+    code_row.addWidget(code_edit)
+    code_row.addWidget(copy_btn)
+    code_row.addStretch(1)
+    layout.addLayout(code_row)
+    layout.addWidget(QLabel("授权密钥："))
+    key_edit = QLineEdit()
+    key_edit.setPlaceholderText("XXXX-XXXX-XXXX-XXXX")
+    layout.addWidget(key_edit)
+    state_label = QLabel("")
+    layout.addWidget(state_label)
+
+    def copy_code() -> None:
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(device_code)
+
+    def try_activate() -> None:
+        key = key_edit.text().strip()
+        if not verify_key(device_code, key):
+            state_label.setText("❌ 密钥不匹配，请核对设备码与密钥")
+            return
+        try:
+            license_file.write_text(
+                _json.dumps({"device_code": device_code, "key": key}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (data_dir / "licensed_mode.flag").write_text("1", encoding="utf-8")
+        except OSError as error:
+            QMessageBox.critical(dialog, "写入失败", f"无法写入激活信息：{error}")
+            return
+        dialog.accept()
+
+    copy_btn.clicked.connect(copy_code)
+    ok_btn = QPushButton("激活并启动")
+    ok_btn.clicked.connect(try_activate)
+    layout.addWidget(ok_btn)
+    return dialog.exec() == QDialog.Accepted
+
+
 def _adapter_dir(tool_root: Path) -> Path:
     if getattr(sys, "frozen", False):
         bundle = Path(getattr(sys, "_MEIPASS", ""))
@@ -559,6 +633,9 @@ def main() -> int:
             event.accept()
 
     window = StationWindow()
+    # 安装版激活校验（data\licensed_mode.flag 存在时）：绿色版无标记直接运行，不受影响
+    if (tool_root / "data" / "licensed_mode.flag").is_file() and not _ensure_license(tool_root / "data"):
+        return 1
     window.show()
     return app.exec()
 
