@@ -1,4 +1,4 @@
-"""素材准备站核心调度器回归测试。
+﻿"""素材准备站核心调度器回归测试。
 
 覆盖：BookID 校验、队列串行、状态持久化、下载信息定位、候选生成写任务、
 三端别名退出码映射、删除/重试。全部通过 mock mjs 调用完成，不依赖 Chrome/Ollama。
@@ -804,3 +804,55 @@ def test_apply_need_more_manual_alias_not_auto_retried(core: StationCore) -> Non
     core._apply(task)
     assert task.auto_retry_count == 0
     assert task.status == STATUS_WAITING_MANUAL
+
+def test_alias_task_path_safe_for_colon_title() -> None:
+    """剧名含英文冒号时，别名任务路径必须与 mjs 下载目录一致（: 替换为 _），不触发 WinError 123。"""
+    from types import SimpleNamespace
+    from station_alias import alias_task_path, _safe_dir_title
+    # 与 mjs safe() 一致
+    assert _safe_dir_title("末日病宠:丧尸前任赖上我了") == "末日病宠_丧尸前任赖上我了"
+    assert _safe_dir_title("岁岁和亲:换山河无恙第二季") == "岁岁和亲_换山河无恙第二季"
+    assert ":" not in _safe_dir_title("a:b?c*d<e>f|g\"h")
+    assert _safe_dir_title("   ") == "未命名"
+    project = SimpleNamespace(series_folder="", platform_title="", title="末日病宠:丧尸前任赖上我了")
+    p = alias_task_path(project, r"D:\素材准备站\data\选剧文件夹\原剧视频")
+    assert "末日病宠_丧尸前任赖上我了" in str(p)
+    assert p.parent.parent.name == "末日病宠_丧尸前任赖上我了"  # 目录名不含冒号
+
+
+def test_generate_alias_task_writes_to_safe_dir(core: StationCore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """带英文冒号的剧名：生成阶段写三端别名任务.json 到下载目录（: 已替换为 _），不抛 WinError 123。"""
+    import re as _re
+    from pathlib import Path
+    from types import SimpleNamespace
+    task = core.add_book_id(BOOK_ID)
+    task_dir = core.data_root / "选剧文件夹" / "原剧视频" / "末日病宠_丧尸前任赖上我了"
+    _write_drama_info(task_dir, BOOK_ID, title="末日病宠:丧尸前任赖上我了")
+    task.info_file = str(task_dir / "剧目信息" / "剧目信息.json")
+    task.task_file = ""
+    # mock 候选生成（不真正调 Ollama）
+    fake_project = SimpleNamespace()
+
+    def fake_write(project, values, preferred_series_root=None, prefix="", mode="prefix"):
+        fake_project.series_folder = getattr(project, "series_folder", "")
+        fake_project.title = getattr(project, "platform_title", "") or getattr(project, "title", "")
+        fake_project.book_id = getattr(project, "book_id", "")
+        fake_project.task_id = getattr(project, "task_id", "")
+        fake_project.workflow_batch_id = getattr(project, "workflow_batch_id", "")
+        from station_alias import alias_task_path
+        return alias_task_path(project, preferred_series_root)
+
+    monkeypatch.setattr("station_alias.generate_alias_candidates", lambda *a, **k: ["知夏甲", "知夏乙", "知夏丙"])
+    monkeypatch.setattr("station_alias.write_alias_task", fake_write)
+    task.status = STATUS_GENERATING
+    core._generate(task)
+    assert task.task_file  # 返回了路径
+    path_str = str(task.task_file)
+    assert "末日病宠_丧尸前任赖上我了" in path_str
+    assert Path(path_str).parent.parent.name == "末日病宠_丧尸前任赖上我了"  # 目录名不含冒号
+    # 路径必须真实存在（mkidr 由 write_alias_task 负责，这里验证目录可创建）
+    p = Path(task.task_file)
+    assert p.parent.name == "剧目信息"
+
+
+

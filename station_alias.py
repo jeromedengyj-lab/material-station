@@ -169,6 +169,16 @@ def read_alias_state(folder: str | Path) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _safe_dir_title(value) -> str:
+    """把剧名清洗成 Windows 合法目录名，规则与 mjs safe() 完全一致：
+    [<>:"/\\|?*] 及控制字符 → _；去掉结尾 . 和空格；超 120 截断；空则用占位名。
+    保证 Python 侧按 title 拼路径时能命中 mjs 下载阶段实际创建的目录
+    （如「末日病宠:丧尸前任赖上我了」→「末日病宠_丧尸前任赖上我了」）。"""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value or "").strip())
+    name = re.sub(r"[. ]+$", "", name)
+    return name[:120] or "未命名"
+
+
 def alias_task_path(project, preferred_series_root: str | Path | None = None) -> Path:
     """Return the single durable alias-review manifest for a project."""
     folder_value = str(getattr(project, "series_folder", "") or "").strip()
@@ -179,7 +189,7 @@ def alias_task_path(project, preferred_series_root: str | Path | None = None) ->
         title = str(getattr(project, "platform_title", "") or getattr(project, "title", "")).strip()
         if not title:
             raise ValueError("缺少剧名，无法建立三端别名任务表")
-        folder = root / title
+        folder = root / _safe_dir_title(title)
     return folder / "剧目信息" / "三端别名任务.json"
 
 
