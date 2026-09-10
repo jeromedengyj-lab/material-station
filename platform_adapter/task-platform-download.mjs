@@ -232,12 +232,13 @@ async function submitAlias(c,alias,bookId){
  }
  if(!clicked){const diagnostics=await ev(c,`(()=>{let d=${visibleDialog},inputs=[...(d||document).querySelectorAll('input')].map(e=>({placeholder:e.placeholder,value:e.value,disabled:e.disabled})),buttons=[...(d||document).querySelectorAll('button')].map(e=>({text:(e.innerText||e.textContent||'').trim(),disabled:e.disabled}));return {message:'别名与发文类型校验后，等待10秒提交按钮仍未启用',inputs,buttons,dialogText:(d?.innerText||'').slice(0,2000)}})()`);return {ok:false,reason:diagnostics}}
  let state;
- for(let i=0;i<60;i++){
+ for(let i=0;i<40;i++){
    if(await verificationChallenge(c))return {ok:false,blocked:true,reason:'检测到任务台滑块/安全验证，需要人工完成后从当前候选恢复'};
    try{state=await ev(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),nonSuccess=messages.some(x=>/已提交|审核中|提交成功|已申请|请勿重复|重复申请|已存在|失败|不通过|被驳回|已拒绝|不可用|不符合|违规|敏感/.test(x)),reject=(${REJECT_MATCH_JS})(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,nonSuccess,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`)}catch{await sleep(500);continue}
    if(state.duplicate)return {ok:false,reason:state};
    if(state.success){try{await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||'').includes('别名创建成功')}),b=d?.querySelector('svg[class*=close],[class*=close]');if(!b)return false;b.click();return true})()`)}catch{}await sleep(150);return {ok:true,state}}if(state.nonSuccess){return {ok:false,reason:{...state,message:'申请窗口未显示“别名创建成功”，按失败处理'}}}
-   await sleep(500);
+   // 前10秒高频轮询（500ms），之后低频（1s），30秒内命中即返回；正常回执1~10秒出现，不会吃满超时
+   await sleep(i<20?500:1000);
  }
   // 按用户规则：申请窗口只要不是显示“别名创建成功”，都算申请失败。
   // 轮询30秒仍未看到成功回执，直接判失败，由三端循环换下一个别名从红果短剧重来。

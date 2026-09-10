@@ -868,8 +868,8 @@ def test_submit_alias_timeout_returns_failure_not_pending() -> None:
     # nonSuccess 不得依赖 dialogOpen（提交后弹窗可能关闭，失败消息以全局 notification 出现）
     assert "nonSuccess=messages.some" in text, "nonSuccess 仍依赖 dialogOpen，弹窗关闭后失败消息会被漏判"
     # 轮询时长至少 30 秒（60次*500ms）
-    assert "i<60" in text
-    assert "sleep(500)" in text
+    assert "i<40" in text
+    assert "sleep(i<20?500:1000)" in text
 
 
 def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
@@ -886,3 +886,4 @@ def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
                 "重复申请", "已存在", "申请失败", "不通过", "被驳回", "已拒绝",
                 "该别名不可用", "不符合规范", "内容违规", "别名敏感"]:
         assert pattern.search(msg), f"nonSuccess 正则未覆盖: {msg}"
+
