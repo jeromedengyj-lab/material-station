@@ -856,3 +856,33 @@ def test_generate_alias_task_writes_to_safe_dir(core: StationCore, monkeypatch: 
 
 
 
+
+def test_submit_alias_timeout_returns_failure_not_pending() -> None:
+    """submitAlias 超时必须判失败（ok:false），不得返回 pending_visibility:true 当作成功继续下一个平台。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    # 超时分支必须返回失败，不得有 pending_visibility:true 的默认成功
+    assert "pending_visibility:true" not in text, "submitAlias 超时仍默认成功，会导致失败别名继续申请下一个平台"
+    assert "按失败处理" in text
+    # nonSuccess 不得依赖 dialogOpen（提交后弹窗可能关闭，失败消息以全局 notification 出现）
+    assert "nonSuccess=messages.some" in text, "nonSuccess 仍依赖 dialogOpen，弹窗关闭后失败消息会被漏判"
+    # 轮询时长至少 30 秒（60次*500ms）
+    assert "i<60" in text
+    assert "sleep(500)" in text
+
+
+def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
+    """nonSuccess 正则必须覆盖平台常见失败/重复消息文本。"""
+    import re
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    m = re.search(r"nonSuccess=messages\.some\(x=>/([^/]+)/", text)
+    assert m, "未找到 nonSuccess 正则"
+    pattern = re.compile(m.group(1))
+    # 平台常见失败消息必须命中
+    for msg in ["已提交", "审核中", "提交成功", "已申请此别名，请勿重复申请",
+                "重复申请", "已存在", "申请失败", "不通过", "被驳回", "已拒绝",
+                "该别名不可用", "不符合规范", "内容违规", "别名敏感"]:
+        assert pattern.search(msg), f"nonSuccess 正则未覆盖: {msg}"
