@@ -924,3 +924,17 @@ def test_platforms_json_contains_tomato_ting() -> None:
     assert isinstance(cfg, list) and len(cfg) == 4
     by_name = {x["name"]: x["tab"] for x in cfg}
     assert by_name == {"红果短剧": 6, "番茄小说": 2, "番茄畅听": 3, "红果漫剧": 16}
+
+def test_build_uninstall_bat() -> None:
+    """一键卸载脚本：杀进程、删程序本体；keep_data=False 连 data 一起删；GBK 可编码。"""
+    from station_main import build_uninstall_bat
+    keep = build_uninstall_bat(r"D:\漫剧剪辑工具\素材准备站", keep_data=True)
+    assert 'taskkill /IM "素材准备站.exe" /F' in keep
+    assert "素材准备站.exe" in keep
+    assert keep.count("rd /s /q") == 3  # 仅 _internal / runtime / logs，不删 data
+    assert "data" not in keep
+    full = build_uninstall_bat(r"D:\漫剧剪辑工具\素材准备站", keep_data=False)
+    assert "data" in full
+    assert full.count("rd /s /q") == 5  # + data + 整个运行目录（彻底卸载）
+    keep.encode("gbk")
+    full.encode("gbk")

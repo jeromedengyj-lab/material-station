@@ -13,12 +13,37 @@ from __future__ import annotations
 import csv
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
 
 from pathlib import Path
 
 STATION_VERSION = "v1.0"
+
+
+def build_uninstall_bat(exe_dir: str, keep_data: bool = True) -> str:
+    """生成一键卸载批处理：先杀进程，再删除程序本体（exe、_internal、runtime、logs）。
+
+    keep_data=True：保留 data（任务记录与已下载剧目），适合更新前清理或暂时停用；
+    keep_data=False：连 data 一起删并清空整个运行目录（彻底卸载，不可恢复）。
+    返回的脚本用 GBK 编码写入（Windows 中文系统 cmd 默认代码页），自身随执行自动删除。
+    """
+    lines = [
+        "@echo off",
+        'taskkill /IM "素材准备站.exe" /F >nul 2>&1',
+        "timeout /t 2 /nobreak >nul",
+        f'rd /s /q "{exe_dir}\\_internal" >nul 2>&1',
+        f'rd /s /q "{exe_dir}\\runtime" >nul 2>&1',
+        f'rd /s /q "{exe_dir}\\logs" >nul 2>&1',
+        f'del /q "{exe_dir}\\素材准备站.exe" >nul 2>&1',
+    ]
+    if not keep_data:
+        lines.append(f'rd /s /q "{exe_dir}\\data" >nul 2>&1')
+        lines.append(f'rd /s /q "{exe_dir}" >nul 2>&1')
+    lines.append('del /q "%~f0" >nul 2>&1')
+    return "\r\n".join(lines) + "\r\n"
 
 # 候选别名的申请结果 → 表格展示文案
 _ALIAS_RESULT_LABELS = {
@@ -373,6 +398,11 @@ def main() -> int:
             ocr_btn.setToolTip("选择剧图，识别图中的剧名/集数/标签后填入上方（可修正），再点「添加任务」")
             ocr_btn.clicked.connect(self._ocr_add)
             top.addWidget(ocr_btn)
+            uninstall_btn = QPushButton("卸载软件")
+            uninstall_btn.setToolTip("一键卸载：关闭进程并删除程序本体（可保留任务数据）。更新版本前可先用它清理")
+            uninstall_btn.setStyleSheet("color:#C0392B;")
+            uninstall_btn.clicked.connect(self._uninstall)
+            top.addWidget(uninstall_btn)
             layout.addLayout(top)
 
             prefix_row = QHBoxLayout()
@@ -633,6 +663,48 @@ def main() -> int:
             path = core.data_root / "选剧文件夹" / "原剧视频"
             path.mkdir(parents=True, exist_ok=True)
             os.startfile(str(path))  # noqa: S606
+
+        def _uninstall(self) -> None:
+            """一键卸载：生成并启动卸载批处理，软件随即退出。
+
+            默认保留 data（任务记录与已下载剧目），可选彻底删除。
+            卸载脚本运行在系统临时目录，删除程序本体后自删，不残留。
+            """
+            if (
+                QMessageBox.question(
+                    self,
+                    "卸载软件",
+                    "确定卸载「素材准备站」吗？\n\n"
+                    "将关闭进程并删除程序本体（exe、_internal、runtime、logs）。\n"
+                    "任务数据（data：已下载剧目、任务记录）默认保留。",
+                )
+                != QMessageBox.Yes
+            ):
+                return
+            keep_data = (
+                QMessageBox.question(
+                    self,
+                    "卸载软件",
+                    "是否同时删除任务数据？\n"
+                    "「否」= 保留 data（推荐，以后重装可继续使用）\n"
+                    "「是」= 彻底删除 data（含已下载剧目，不可恢复）",
+                )
+                != QMessageBox.Yes
+            )
+            try:
+                exe_dir = str(Path(sys.executable).resolve().parent)
+                bat = Path(tempfile.gettempdir()) / f"uninstall_station_{os.getpid()}.bat"
+                bat.write_text(build_uninstall_bat(exe_dir, keep_data=keep_data), encoding="gbk")
+                subprocess.Popen(
+                    ["cmd", "/c", str(bat)],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception as error:  # noqa: BLE001
+                QMessageBox.warning(self, "卸载失败", f"无法启动卸载脚本：{error}")
+                return
+            self._append_log("正在卸载程序本体…")
+            QApplication.quit()
+            os._exit(0)
 
         def _on_table_mode_changed(self, index: int) -> None:
             core.table_mode = "single" if index == 0 else "per_batch"
