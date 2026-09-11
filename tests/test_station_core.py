@@ -902,6 +902,9 @@ def test_platforms_config_driven_mjs() -> None:
     # 卡片与申词记录判断必须用 platform.marker，不再写死“漫剧”
     assert "t.includes(platform.marker)" in text
     assert "marker==='*'||" in text
+    # --probe-platforms 自动探测内容库菜单
+    assert "--probe-platforms" in text
+    assert "tab_type=(\\d+)" in text
 
 
 def test_platforms_json_contains_tomato_ting() -> None:

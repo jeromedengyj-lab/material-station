@@ -419,6 +419,13 @@ try{
  await c.send('Page.bringToFront');
  if(inspectOnly&&argv.includes('--inspect-body')){console.log((await ev(c,`document.body.innerText`)).slice(0,12000));c.close();process.exit(0)}
  if(inspectOnly&&val('--inspect-url')){await c.send('Page.navigate',{url:val('--inspect-url')});await sleep(1800)}
+ if(inspectOnly&&argv.includes('--probe-platforms')){
+   // 自动扫描内容库菜单：输出所有 {name, tab}，可直接粘贴进 data/platforms.json
+   await c.send('Page.navigate',{url:CONTENT_URL});await sleep(1500);
+   const menus=await ev(c,`(()=>[...document.querySelectorAll('a[href*="/page/member/content"][href*="tab_type="]')].map(a=>{let h=a.getAttribute('href')||'',m=h.match(/tab_type=(\d+)/),t=(a.innerText||a.textContent||'').trim();return m&&t?{name:t,tab:Number(m[1])}:null}).filter(Boolean))()`);
+   console.log(JSON.stringify(menus,null,2));
+   c.close();process.exit(0);
+ }
  if(inspectOnly&&argv.includes('--inspect-routes')){console.log(JSON.stringify(await ev(c,`(()=>{let names=['红果短剧','番茄小说','红果漫剧','申词记录','内容库'];return names.map(name=>({name,matches:[...document.querySelectorAll('body *')].filter(e=>(e.innerText||e.textContent||'').trim()===name).slice(0,20).map(e=>{let a=e.closest('a');return {tag:e.tagName,cls:String(e.className||''),href:a?.href||e.getAttribute('href'),parent:e.parentElement?.outerHTML.slice(0,1000)}})}))})()`),null,2));c.close();process.exit(0)}
  if(inspectOnly&&argv.includes('--inspect-alias-html')){let opened=false;for(let i=0;i<20&&!opened;i++){opened=await ev(c,`(()=>{let b=[...document.querySelectorAll('button,[role=button]')].find(e=>(e.innerText||e.textContent||'').trim()==='别名推广');if(!b)return false;b.click();return true})()`);if(!opened)await sleep(300)}await sleep(500);console.log(await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>(e.innerText||'').includes('别名推广'));return d?.outerHTML||''})()`));c.close();process.exit(0)}
  if(inspectOnly&&argv.includes('--view-alias-tasks')){await ev(c,`(()=>{let b=[...document.querySelectorAll('button,[role=button]')].find(e=>(e.innerText||e.textContent||'').trim()==='查看任务');if(b)b.click();return!!b})()`);await sleep(1500);console.log(await ev(c,`document.body.innerText`));c.close();process.exit(0)}
