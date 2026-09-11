@@ -873,7 +873,8 @@ def test_submit_alias_timeout_returns_failure_not_pending() -> None:
 
 
 def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
-    """nonSuccess 正则必须覆盖平台常见失败/重复消息文本。"""
+    """nonSuccess 正则：真正的失败/重复消息必须命中；中转词（已提交/审核中/提交成功/已申请）
+    绝不能命中——否则成功弹窗前的“审核中”会误判失败，候选在第一个平台反复失败。"""
     import re
     from pathlib import Path
     mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
@@ -881,11 +882,14 @@ def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
     m = re.search(r"nonSuccess=messages\.some\(x=>/([^/]+)/", text)
     assert m, "未找到 nonSuccess 正则"
     pattern = re.compile(m.group(1))
-    # 平台常见失败消息必须命中
-    for msg in ["已提交", "审核中", "提交成功", "已申请此别名，请勿重复申请",
-                "重复申请", "已存在", "申请失败", "不通过", "被驳回", "已拒绝",
-                "该别名不可用", "不符合规范", "内容违规", "别名敏感"]:
+    # 真正的失败/重复消息必须命中（弹窗关闭后的全局失败提示也要识别）
+    for msg in ["已申请此别名，请勿重复申请", "重复申请", "已存在", "申请失败",
+                "不通过", "被驳回", "已拒绝", "该别名不可用", "不符合规范",
+                "内容违规", "别名敏感"]:
         assert pattern.search(msg), f"nonSuccess 正则未覆盖: {msg}"
+    # 平台中转提示绝不能判失败（成功弹窗前常出现）
+    for msg in ["已提交", "审核中", "提交成功", "已申请"]:
+        assert not pattern.search(msg), f"中转词不能判失败: {msg}"
 
 
 def test_platforms_config_driven_mjs() -> None:
@@ -1003,3 +1007,19 @@ def test_platform_count_dynamic() -> None:
     ctext = core.read_text(encoding="utf-8")
     assert "正在申请三端关键词别名" not in ctext
     assert "platform_count(self.tool_root)" in ctext
+
+def test_submit_transient_words_not_failure() -> None:
+    """提交轮询：平台中转提示（已提交/审核中/提交成功/已申请）绝不能判失败；
+    只有真正的拒绝词（请勿重复/已存在/失败等）才判失败。否则成功弹窗前的“审核中”
+    会误判失败，导致候选在第一个平台反复失败、其他平台永远轮不到。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    seg = text.split("nonSuccess=messages.some")[1].split("reject=")[0]
+    assert "审核中" not in seg and "已提交" not in seg
+    assert "提交成功" not in seg and "已申请" not in seg
+    # 硬失败词必须保留（弹窗关闭后的全局失败提示仍要识别）
+    for word in ("请勿重复", "重复申请", "已存在", "被驳回", "不可用"):
+        assert word in seg
+    # 成功判定仍然存在
+    assert "别名创建成功" in text
