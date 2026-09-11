@@ -1023,3 +1023,20 @@ def test_submit_transient_words_not_failure() -> None:
         assert word in seg
     # 成功判定仍然存在
     assert "别名创建成功" in text
+
+def test_openbook_safeev_no_crash() -> None:
+    """openBookForPlatform 必须用 safeEv（页面导航/重渲染销毁上下文时自动重试），
+    且调用处包 try 兜底——否则 Uncaught 崩进程、状态未保存、重启从头重复申请。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    fn = text.split("async function openBookForPlatform")[1].split("async function checkAliasStatus")[0]
+    # 函数体内不允许裸 ev（必须全部 safeEv）
+    assert "await ev(c,`" not in fn, "openBookForPlatform 内存在未保护的 ev 调用"
+    assert fn.count("await safeEv(c,`") == 3
+    # helper 存在
+    assert "async function safeEv" in text
+    # 调用处 try 兜底
+    assert "try{return await openBookForPlatform(c,p,bookId,totalEpisodes)}catch" in text
+    # 崩溃后不丢进度：while 循环每次候选开始都有 save
+    assert "await save();let failed=false,transientFailure=null" in text

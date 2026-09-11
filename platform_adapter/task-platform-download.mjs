@@ -146,6 +146,7 @@ async function client(){
  if(!p)die('找不到任务台标签页。',6);const c=new CDP(p.webSocketDebuggerUrl);await c.open();for(const x of ['Runtime.enable','Page.enable','Network.enable'])await c.send(x);try{await c.send('Network.setCacheDisabled',{cacheDisabled:true})}catch{}return c;
 }
 async function ev(c,x){const r=await c.send('Runtime.evaluate',{expression:x,awaitPromise:true,returnByValue:true,userGesture:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.text);return r.result.value}
+async function safeEv(c,x,retries=4){for(let a=0;a<retries;a++){try{return await ev(c,x)}catch(e){await sleep(300)}}throw Error('页面执行上下文异常（safeEv 重试耗尽）')}
 async function verificationChallenge(c){
  try{return await ev(c,`(()=>{const visible=e=>{const r=e.getBoundingClientRect();return r.width>2&&r.height>2},text=[...document.querySelectorAll('body *')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean).join('\\n');return /请完成下列验证后继续|拖动完成上方拼图|滑块验证|安全验证/.test(text)})()`)}catch{return false}
 }
@@ -317,18 +318,18 @@ async function openBookForPlatform(c,platform,bookId,totalEpisodes=0){
    const candidates=await collectCandidates(c,platform,bookId,title,totalEpisodes);
    if(candidates.length){
      for(const candidate of candidates){
-       const clicked=await ev(c,`(()=>{let b=[...document.querySelectorAll('button,[role=button]')].filter(e=>(e.innerText||e.textContent||'').trim()==='别名推广')[${Number(candidate.index)}];if(!b)return false;b.scrollIntoView({block:'center'});try{b.click()}catch{}return true})()`);
+       const clicked=await safeEv(c,`(()=>{let b=[...document.querySelectorAll('button,[role=button]')].filter(e=>(e.innerText||e.textContent||'').trim()==='别名推广')[${Number(candidate.index)}];if(!b)return false;b.scrollIntoView({block:'center'});try{b.click()}catch{}return true})()`);
        if(!clicked)continue;
        let verified=false,modalText='';
        for(let j=0;j<30&&!verified;j++){
-         const info=await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect(),t=e.innerText||'';return r.width>2&&r.height>2&&t.includes('别名推广')&&t.includes('书籍信息')});return d?{text:(d.innerText||'').trim(),html:d.outerHTML.slice(0,5000)}:null})()`);
+         const info=await safeEv(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect(),t=e.innerText||'';return r.width>2&&r.height>2&&t.includes('别名推广')&&t.includes('书籍信息')});return d?{text:(d.innerText||'').trim(),html:d.outerHTML.slice(0,5000)}:null})()`);
          if(info){modalText=info.text;verified=modalText.includes(String(bookId));break}
          await sleep(100);
        }
        if(verified){
          return {ok:true,platform_book_id:String(bookId),title_match:!!candidate.title_match,episode_match:!!candidate.episode_match,verified_modal_open:true};
        }
-       await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>(e.innerText||'').includes('书籍信息')),close=d&&([...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='取消')||d.querySelector('svg[class*=close],[class*=close]'));if(!close)return false;try{close.click()}catch{}return true})()`);
+       await safeEv(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>(e.innerText||'').includes('书籍信息')),close=d&&([...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='取消')||d.querySelector('svg[class*=close],[class*=close]'));if(!close)return false;try{close.click()}catch{}return true})()`);
        await sleep(200);
      }
      return {ok:false,reason:`${platform.name}同名漫剧结果的弹窗BookID均与目标不一致`};
@@ -418,7 +419,7 @@ async function runTripleWorkflow(c){
      if(status.state==='absent'&&previous?.submitted_at){const visibilityAge=Date.now()-Date.parse(previous.submitted_at);if(visibilityAge<2*60*1000)status={state:'pending_visibility',submitted_at:previous.submitted_at};else{state.platforms[alias][p.name]={state:'visibility_timeout',submitted_at:previous.submitted_at,reason:'提交后暂未出现申词记录；保留当前候选，稍后重新核验且不重复提交'};await perf('visibility_timeout',{book_id:bookId,alias,platform:p.name,visibility_age_ms:visibilityAge});transientFailure={platform:p.name,reason:'提交记录暂不可见'};break}}
      if(status.state==='rejected'){state.platforms[alias][p.name]=status;failed=true;break}
      if(status.state==='absent'){
-       const openStarted=Date.now(),opened=await openBookForPlatform(c,p,bookId,totalEpisodes);await perf('open_book',{book_id:bookId,alias,platform:p.name,duration_ms:Date.now()-openStarted,ok:opened.ok,reason:opened.reason,title_match:opened.title_match,episode_match:opened.episode_match});if(!opened.ok){state.platforms[alias][p.name]={state:'submit_failed',reason:opened.reason};transientFailure={platform:p.name,reason:opened.reason};break}
+       const openStarted=Date.now(),opened=await (async()=>{try{return await openBookForPlatform(c,p,bookId,totalEpisodes)}catch(e){return {ok:false,reason:'打开书籍异常：'+String(e?.message||e)}}})();await perf('open_book',{book_id:bookId,alias,platform:p.name,duration_ms:Date.now()-openStarted,ok:opened.ok,reason:opened.reason,title_match:opened.title_match,episode_match:opened.episode_match});if(!opened.ok){state.platforms[alias][p.name]={state:'submit_failed',reason:opened.reason};transientFailure={platform:p.name,reason:opened.reason};break}
        const submitStarted=Date.now(),submitted=await submitAlias(c,alias,bookId);await perf('submit_alias',{book_id:bookId,alias,platform:p.name,duration_ms:Date.now()-submitStarted,ok:submitted.ok,blocked:!!submitted.blocked,reason:submitted.ok?undefined:submitted.reason});
        if(submitted.blocked){
          state.platforms[alias][p.name]={state:'verification_required',reason:submitted.reason,detected_at:new Date().toISOString()};
