@@ -244,20 +244,22 @@ async function submitAlias(c,alias,bookId){
    if(!clicked)await sleep(250);
  }
  if(!clicked){const diagnostics=await ev(c,`(()=>{let d=${visibleDialog},inputs=[...(d||document).querySelectorAll('input')].map(e=>({placeholder:e.placeholder,value:e.value,disabled:e.disabled})),buttons=[...(d||document).querySelectorAll('button')].map(e=>({text:(e.innerText||e.textContent||'').trim(),disabled:e.disabled}));return {message:'别名与发文类型校验后，等待10秒提交按钮仍未启用',inputs,buttons,dialogText:(d?.innerText||'').slice(0,2000)}})()`);return {ok:false,reason:diagnostics}}
+ await sleep(2000);
  let state;
- for(let i=0;i<16;i++){
+ for(let i=0;i<4;i++){
    if(await verificationChallenge(c))return {ok:false,blocked:true,reason:'检测到任务台滑块/安全验证，需要人工完成后从当前候选恢复'};
    try{state=await safeEv(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal,[class*=modal],[class*=popup],[class*=result]')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),bodyText=document.body.innerText||'',// 成功弹窗组件不固定（可能不是 dialog/modal class），用页面正文全文兜底，弹窗一出现立即识别、不用等满30秒超时
 success=messages.some(x=>x.includes('别名创建成功'))||bodyText.includes('别名创建成功'),nonSuccess=messages.some(x=>/请勿重复|重复申请|已存在|失败|不通过|被驳回|已拒绝|不可用|不符合|违规|敏感/.test(x)),reject=(${REJECT_MATCH_JS})(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,nonSuccess,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`)}catch{await sleep(500);continue}
    if(state.duplicate)return {ok:false,reason:state};
    if(state.success){try{await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||'').includes('别名创建成功')}),b=d?.querySelector('svg[class*=close],[class*=close]');if(!b)return false;b.click();return true})()`)}catch{}await sleep(150);return {ok:true,state}}// 注意：已提交/审核中/提交成功/已申请 是平台的中转提示，绝不能当失败——否则成功弹窗前的“审核中”会误判失败，候选在第一个平台反复失败
    if(state.nonSuccess){return {ok:false,reason:{...state,message:'申请窗口未显示“别名创建成功”，按失败处理'}}}
-   // 8秒高频轮询（500ms×16），命中成功弹窗立即返回；没命中由上层查申词记录权威确认
+   // 提交后已等 2 秒让平台处理；再快速轮询 2 秒（500ms×4）识别成功弹窗，命中立即返回；
+   // 没命中由上层查申词记录权威确认（pending/approved→成功），不再等弹窗空耗
    await sleep(500);
  }
   // 8秒内未识别到成功回执：返回 timeout 标记，不直接判失败——
   // 由 runTripleWorkflow 查申词记录权威确认（平台已收到→成功；记录也没有→真失败换候选）。
-  return {ok:false,timeout:true,reason:{...(state||{}),timeout:true,message:'提交后8秒内未识别到成功回执，待申词记录确认'}};
+  return {ok:false,timeout:true,reason:{...(state||{}),timeout:true,message:'提交后未识别到成功弹窗，待申词记录确认'}};
 }
 const POST_TYPE=loadPostType();
 // 发文类型可配置：data/post_type.json（软件界面可改并记住），缺失/非法回退“解说混剪”。

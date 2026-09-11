@@ -867,8 +867,8 @@ def test_submit_alias_timeout_returns_failure_not_pending() -> None:
     assert "按失败处理" in text
     # nonSuccess 不得依赖 dialogOpen（提交后弹窗可能关闭，失败消息以全局 notification 出现）
     assert "nonSuccess=messages.some" in text, "nonSuccess 仍依赖 dialogOpen，弹窗关闭后失败消息会被漏判"
-    # 成功回执轮询 8 秒（16次*500ms），超时返回 timeout 标记由申词记录兜底确认
-    assert "for(let i=0;i<16;i++){" in text
+    # 提交后等 2 秒+快速轮询 2 秒（4次*500ms），超时返回 timeout 标记由申词记录兜底确认
+    assert "for(let i=0;i<4;i++){" in text
     assert "await sleep(500);" in text
     assert "timeout:true" in text
 
@@ -1114,8 +1114,8 @@ def test_submit_ledger_fallback_no_const_reassign() -> None:
     # 根因回归：submitted 必须是 let（const 赋值必崩）
     assert "let submitted=await submitAlias(" in text
     assert "const submitStarted=Date.now(),submitted=" not in text
-    # 成功回执轮询 8 秒（16×500ms）
-    assert "let state;\n for(let i=0;i<16;i++){" in text
+    # 提交后等 2 秒再快速轮询 2 秒（4×500ms）识别成功弹窗，未命中由申词记录权威确认
+    assert "await sleep(2000);\n let state;\n for(let i=0;i<4;i++){" in text
     assert "timeout:true" in text
     # 兜底二次查询（平台记录同步延迟）
     assert "verify2" in text and "await sleep(2000)" in text
