@@ -1065,3 +1065,15 @@ def test_post_type_configurable_and_persisted() -> None:
     assert "JSON.stringify(POST_TYPE)" in text
     # 弹窗找不到文案也随配置
     assert "${POST_TYPE}" in text
+
+def test_post_type_combo_presets_all_platform_options() -> None:
+    """发文类型下拉预置任务台全部选项（解说混剪/真人出镜/图文/解压TTS/meme剪辑/
+    AIGC/营销号/沙雕漫/AI数字人/滚屏素材），保持可编辑，默认解说混剪。"""
+    from pathlib import Path
+    main = Path(__file__).resolve().parent.parent / "station_main.py"
+    text = main.read_text(encoding="utf-8")
+    seg = text.split("self.post_type_combo.addItems([")[1].split("])")[0]
+    for item in ["解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑",
+                 "AIGC", "营销号", "沙雕漫", "AI数字人", "滚屏素材"]:
+        assert item in seg, f"下拉缺少选项: {item}"
+    assert "self.post_type_combo.setEditable(True)" in text

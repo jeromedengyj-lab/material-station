@@ -450,11 +450,16 @@ def main() -> int:
             post_row.addWidget(QLabel("发文类型："))
             self.post_type_combo = QComboBox()
             self.post_type_combo.setEditable(True)
-            self.post_type_combo.addItem(core.post_type or "解说混剪")
+            # 任务台「请选择计划发文的素材类型」全部选项，直接点选；仍可编辑（可填新类型）
+            self.post_type_combo.addItems([
+                "解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑",
+                "AIGC", "营销号", "沙雕漫", "AI数字人", "滚屏素材",
+            ])
             self.post_type_combo.setCurrentText(core.post_type or "解说混剪")
             self.post_type_combo.setToolTip(
                 "平台弹窗「请选择计划发文的素材类型」选的值；\n"
-                "可直接输入平台里存在的类型，选好后下次打开保持"
+                "直接点选任务台现有类型（含真人出镜/图文/解压TTS/meme剪辑/AIGC/营销号/沙雕漫/AI数字人/滚屏素材），\n"
+                "也可自行输入，选好后下次打开保持"
             )
             self.post_type_combo.editTextChanged.connect(self._on_post_type_changed)
             post_row.addWidget(self.post_type_combo, 1)
