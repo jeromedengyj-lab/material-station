@@ -973,3 +973,33 @@ def test_openbook_wait_and_retry_guard() -> None:
     # 收集逻辑只读：不含 click
     seg = text.split("async function collectCandidates")[1].split("async function openBookForPlatform")[0]
     assert ".click" not in seg
+
+def test_platform_count_dynamic() -> None:
+    """平台数量动态读取：platforms.json 有几个就用几个（剥注释），缺失回退 3；
+    界面文案不再写死“三端”。"""
+    from station_core import platform_count
+    import tempfile, json
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp())
+    (root / "data").mkdir()
+    # 4 平台 + 注释
+    (root / "data" / "platforms.json").write_text(
+        "// 平台列表\n[ {\"name\": \"红果短剧\", \"tab\": 6}, {\"name\": \"番茄小说\", \"tab\": 2},\n"
+        "  {\"name\": \"番茄畅听\", \"tab\": 3}, {\"name\": \"红果漫剧\", \"tab\": 16} ]",
+        encoding="utf-8",
+    )
+    assert platform_count(root) == 4
+    # 缺失回退 3
+    assert platform_count(root / "不存在") == 3
+    # 非法 JSON 回退 3
+    (root / "data" / "platforms.json").write_text("not json", encoding="utf-8")
+    assert platform_count(root) == 3
+    # 界面不再写死“三端”
+    main = Path(__file__).resolve().parent.parent / "station_main.py"
+    mtext = main.read_text(encoding="utf-8")
+    assert "申请三端别名" not in mtext
+    assert "platform_count(tool_root)" in mtext
+    core = Path(__file__).resolve().parent.parent / "station_core.py"
+    ctext = core.read_text(encoding="utf-8")
+    assert "正在申请三端关键词别名" not in ctext
+    assert "platform_count(self.tool_root)" in ctext

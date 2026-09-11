@@ -133,6 +133,23 @@ def terminate_active_procs(grace: float = 3.0) -> int:
     return killed
 
 
+def platform_count(tool_root: str | Path) -> int:
+    """读取 data/platforms.json 的平台数量（与 mjs loadPlatforms 同源，剥注释）。
+
+    写几个平台就用几个（顺序即申请顺序）；文件缺失/非法时回退 3。
+    """
+    try:
+        text = (Path(tool_root) / "data" / "platforms.json").read_text(encoding="utf-8")
+        cleaned = re.sub(r"/\*[\s\S]*?\*/", "", text)
+        cleaned = re.sub(r"(^|[^:])\/\/.*$", r"\1", cleaned, flags=re.M)
+        data = json.loads(cleaned)
+        if isinstance(data, list) and data:
+            return len(data)
+    except Exception:  # noqa: BLE001
+        pass
+    return 3
+
+
 def clean_role_locks(tool_root: str | Path) -> int:
     """删除 runtime/platform_adapter 下的角色锁（alias.lock/download.lock）。
 
@@ -1345,7 +1362,7 @@ class StationCore:
         submit_only=False：完整流程，提交后原地轮询审核直到出结果（watch 模式）。
         """
         task.status = STATUS_APPLYING
-        task.detail = "正在申请三端关键词别名"
+        task.detail = f"正在申请{platform_count(self.tool_root)}端关键词别名"
         task.updated_at = time.time()
         self._save_state()
         self._emit(task.book_id, task.status, task.detail)

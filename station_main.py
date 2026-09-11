@@ -308,6 +308,7 @@ def main() -> int:
         StationCore, STATUS_QUEUED, STATUS_DOWNLOADING, STATUS_GENERATING,
         STATUS_APPLYING, STATUS_SUBMITTED, STATUS_REVIEWING,
         STATUS_WAITING_MANUAL, STATUS_DONE, STATUS_FAILED,
+        platform_count,
     )
 
     tool_root = _tool_root()
@@ -325,7 +326,7 @@ def main() -> int:
             STATUS_QUEUED: "排队中",
             STATUS_DOWNLOADING: "下载原剧+封面",
             STATUS_GENERATING: "生成候选别名",
-            STATUS_APPLYING: "申请三端别名",
+            STATUS_APPLYING: f"申请{platform_count(tool_root)}端别名",
             STATUS_SUBMITTED: "已提交待审核",
             STATUS_REVIEWING: "统一审核中",
             STATUS_WAITING_MANUAL: "需人工处理",
@@ -453,7 +454,7 @@ def main() -> int:
             manual_apply_btn = QPushButton("申请手动别名")
             manual_apply_btn.clicked.connect(self._apply_manual_alias)
             manual_row.addWidget(manual_apply_btn)
-            manual_row.addWidget(QLabel("（需先有剧目信息，跳过AI生成直接申请三端）"))
+            manual_row.addWidget(QLabel(f"（需先有剧目信息，跳过AI生成直接申请{platform_count(tool_root)}端）"))
             layout.addLayout(manual_row)
 
             self.table = QTableWidget(0, 5)
