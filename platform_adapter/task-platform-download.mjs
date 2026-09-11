@@ -244,7 +244,28 @@ async function submitAlias(c,alias,bookId){
   // 轮询30秒仍未看到成功回执，直接判失败，由三端循环换下一个别名从红果短剧重来。
   return {ok:false,reason:{...(state||{}),message:'提交后30秒内未看到“别名创建成功”回执，按失败处理'}};
 }
-const PLATFORMS=[{name:'红果短剧',tab:6},{name:'番茄小说',tab:2},{name:'红果漫剧',tab:16}];
+const DEFAULT_PLATFORMS=[{name:'红果短剧',tab:6},{name:'番茄小说',tab:2},{name:'红果漫剧',tab:16}];
+// 平台列表可配置：data/platforms.json 写几个用几个（顺序即申请顺序）。
+// 每条 {name, tab, marker?}：tab=内容库/申词记录菜单 URL 的 tab_type 值；
+// marker=卡片/申词记录里必须包含的标识词，缺省“漫剧”，填“*”表示不限制。
+function loadPlatforms(){
+  try{
+    const cfgPath=path.join(ROOT,'platforms.json');
+    if(!fs.existsSync(cfgPath))return DEFAULT_PLATFORMS;
+    const cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'));
+    const list=Array.isArray(cfg)?cfg:(Array.isArray(cfg?.platforms)?cfg.platforms:null);
+    if(!Array.isArray(list)||list.length===0)return DEFAULT_PLATFORMS;
+    const out=[];
+    for(const p of list){
+      const name=String(p?.name||'').trim(),tab=Number(p?.tab);
+      if(!name||!Number.isInteger(tab)||tab<=0)continue;
+      const marker=String(p?.marker||'').trim()||'漫剧';
+      out.push({name,tab,marker});
+    }
+    return out.length?out:DEFAULT_PLATFORMS;
+  }catch{return DEFAULT_PLATFORMS}
+}
+const PLATFORMS=loadPlatforms();
 const tripleApprovalValid=(state,alias,bookId)=>{
  const adopted=String(alias||state?.approved_alias||'').trim(),stateBook=String(state?.book_id||'').trim();
  if(!adopted||stateBook!==String(bookId||'').trim())return false;
@@ -264,7 +285,7 @@ async function openBookForPlatform(c,platform,bookId,totalEpisodes=0){
  if(!await waitSearch(c))return {ok:false,reason:`${platform.name}没有搜索框`};
  if(!await search(c,String(bookId)))return {ok:false,reason:`${platform.name}按BookID搜索失败`};
  for(let i=0;i<80;i++){
-   const candidates=await ev(c,`(()=>{let norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),ep=${Number(totalEpisodes)||0},buttons=[...document.querySelectorAll('button,[role=button]')].filter(b=>(b.innerText||b.textContent||'').trim()==='别名推广'),out=[];for(let n=0;n<buttons.length;n++){let b=buttons[n],x=b;for(let j=0;j<16&&x;j++,x=x.parentElement){let t=(x.innerText||'').trim();if(t.includes('漫剧')&&t.length<1200){let exact=[x,...x.querySelectorAll('*')].some(e=>norm(e.innerText||e.textContent||'')===q);out.push({index:n,title_match:exact,episode_match:!ep||t.includes(ep+'集'),text:t.slice(0,800)});break}}}return out.sort((a,b)=>Number(b.title_match)-Number(a.title_match)||Number(b.episode_match)-Number(a.episode_match))})()`);
+   const candidates=await ev(c,`(()=>{let norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),ep=${Number(totalEpisodes)||0},buttons=[...document.querySelectorAll('button,[role=button]')].filter(b=>(b.innerText||b.textContent||'').trim()==='别名推广'),out=[];for(let n=0;n<buttons.length;n++){let b=buttons[n],x=b;for(let j=0;j<16&&x;j++,x=x.parentElement){let t=(x.innerText||'').trim();if(t.includes(platform.marker)&&t.length<1200){let exact=[x,...x.querySelectorAll('*')].some(e=>norm(e.innerText||e.textContent||'')===q);out.push({index:n,title_match:exact,episode_match:!ep||t.includes(ep+'集'),text:t.slice(0,800)});break}}}return out.sort((a,b)=>Number(b.title_match)-Number(a.title_match)||Number(b.episode_match)-Number(a.episode_match))})()`);
    if(candidates.length){
      for(const candidate of candidates){
        const clicked=await ev(c,`(()=>{let b=[...document.querySelectorAll('button,[role=button]')].filter(e=>(e.innerText||e.textContent||'').trim()==='别名推广')[${Number(candidate.index)}];if(!b)return false;b.scrollIntoView({block:'center'});try{b.click()}catch{}return true})()`);
@@ -290,7 +311,7 @@ async function openBookForPlatform(c,platform,bookId,totalEpisodes=0){
 async function checkAliasStatus(c,platform,alias,bookId){
  if(!await clickPlatformRoute(c,'promotion-list',platform.tab))return {state:'error',reason:`找不到${platform.name}申词记录菜单`};
  await sleep(1000);
- const row=await ev(c,`(()=>{let alias=${JSON.stringify(alias)},id=${JSON.stringify(String(bookId))},els=[...document.querySelectorAll('body *')].filter(e=>(e.innerText||e.textContent||'').trim()===alias);for(const e of els){let r=e.closest('tr'),t=r?.innerText||'';if(r&&t.includes(id)&&t.includes('漫剧'))return t;let x=e;for(let i=0;i<8&&x;i++,x=x.parentElement){let s=x.innerText||'';if(s.includes(id)&&s.includes('漫剧')&&s.length<3000)return s}}return ''})()`);
+ const row=await ev(c,`(()=>{let alias=${JSON.stringify(alias)},id=${JSON.stringify(String(bookId))},marker=${JSON.stringify(platform.marker)},els=[...document.querySelectorAll('body *')].filter(e=>(e.innerText||e.textContent||'').trim()===alias);for(const e of els){let r=e.closest('tr'),t=r?.innerText||'';if(r&&t.includes(id)&&(marker==='*'||t.includes(marker)))return t;let x=e;for(let i=0;i<8&&x;i++,x=x.parentElement){let s=x.innerText||'';if(s.includes(id)&&(marker==='*'||s.includes(marker))&&s.length<3000)return s}}return ''})()`);
  if(!row)return {state:'absent'};
  if(/审核不通过|不通过|已拒绝|已驳回|已失效/.test(row))return {state:'rejected',text:row};
  if((/生效中|审核通过|已通过/.test(row))&&/可用/.test(row))return {state:'approved',text:row};

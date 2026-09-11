@@ -887,3 +887,30 @@ def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
                 "该别名不可用", "不符合规范", "内容违规", "别名敏感"]:
         assert pattern.search(msg), f"nonSuccess 正则未覆盖: {msg}"
 
+
+def test_platforms_config_driven_mjs() -> None:
+    """平台列表必须配置化：data/platforms.json 写几个用几个，找不到回退默认3个；
+    marker 随平台配置（缺省“漫剧”，可填“*”不限制）。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    assert "DEFAULT_PLATFORMS" in text and "loadPlatforms" in text
+    assert "path.join(ROOT,'platforms.json')" in text or "path.join(ROOT, 'platforms.json')" in text
+    assert "写几个用几个" in text or "out.length?out:DEFAULT_PLATFORMS" in text
+    # 配置缺失/非法回退默认
+    assert "return DEFAULT_PLATFORMS" in text
+    # 卡片与申词记录判断必须用 platform.marker，不再写死“漫剧”
+    assert "t.includes(platform.marker)" in text
+    assert "marker==='*'||" in text
+
+
+def test_platforms_json_contains_tomato_ting() -> None:
+    """data/platforms.json 必须包含 4 个平台，番茄畅听 tab=3。"""
+    import json
+    from pathlib import Path
+    p = Path(r"D:\漫剧剪辑工具\素材准备站\data\platforms.json")
+    assert p.is_file(), "缺少 data/platforms.json"
+    cfg = json.loads(p.read_text(encoding="utf-8"))
+    assert isinstance(cfg, list) and len(cfg) == 4
+    by_name = {x["name"]: x["tab"] for x in cfg}
+    assert by_name == {"红果短剧": 6, "番茄小说": 2, "番茄畅听": 3, "红果漫剧": 16}
