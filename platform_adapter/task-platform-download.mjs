@@ -245,19 +245,19 @@ async function submitAlias(c,alias,bookId){
  }
  if(!clicked){const diagnostics=await ev(c,`(()=>{let d=${visibleDialog},inputs=[...(d||document).querySelectorAll('input')].map(e=>({placeholder:e.placeholder,value:e.value,disabled:e.disabled})),buttons=[...(d||document).querySelectorAll('button')].map(e=>({text:(e.innerText||e.textContent||'').trim(),disabled:e.disabled}));return {message:'别名与发文类型校验后，等待10秒提交按钮仍未启用',inputs,buttons,dialogText:(d?.innerText||'').slice(0,2000)}})()`);return {ok:false,reason:diagnostics}}
  let state;
- for(let i=0;i<40;i++){
+ for(let i=0;i<16;i++){
    if(await verificationChallenge(c))return {ok:false,blocked:true,reason:'检测到任务台滑块/安全验证，需要人工完成后从当前候选恢复'};
    try{state=await safeEv(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal,[class*=modal],[class*=popup],[class*=result]')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),bodyText=document.body.innerText||'',// 成功弹窗组件不固定（可能不是 dialog/modal class），用页面正文全文兜底，弹窗一出现立即识别、不用等满30秒超时
 success=messages.some(x=>x.includes('别名创建成功'))||bodyText.includes('别名创建成功'),nonSuccess=messages.some(x=>/请勿重复|重复申请|已存在|失败|不通过|被驳回|已拒绝|不可用|不符合|违规|敏感/.test(x)),reject=(${REJECT_MATCH_JS})(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,nonSuccess,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`)}catch{await sleep(500);continue}
    if(state.duplicate)return {ok:false,reason:state};
    if(state.success){try{await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||'').includes('别名创建成功')}),b=d?.querySelector('svg[class*=close],[class*=close]');if(!b)return false;b.click();return true})()`)}catch{}await sleep(150);return {ok:true,state}}// 注意：已提交/审核中/提交成功/已申请 是平台的中转提示，绝不能当失败——否则成功弹窗前的“审核中”会误判失败，候选在第一个平台反复失败
    if(state.nonSuccess){return {ok:false,reason:{...state,message:'申请窗口未显示“别名创建成功”，按失败处理'}}}
-   // 前10秒高频轮询（500ms），之后低频（1s），30秒内命中即返回；正常回执1~10秒出现，不会吃满超时
-   await sleep(i<20?500:1000);
+   // 8秒高频轮询（500ms×16），命中成功弹窗立即返回；没命中由上层查申词记录权威确认
+   await sleep(500);
  }
-  // 按用户规则：申请窗口只要不是显示“别名创建成功”，都算申请失败。
-  // 轮询30秒仍未看到成功回执，直接判失败，由三端循环换下一个别名从红果短剧重来。
-  return {ok:false,reason:{...(state||{}),message:'提交后30秒内未看到“别名创建成功”回执，按失败处理'}};
+  // 8秒内未识别到成功回执：返回 timeout 标记，不直接判失败——
+  // 由 runTripleWorkflow 查申词记录权威确认（平台已收到→成功；记录也没有→真失败换候选）。
+  return {ok:false,timeout:true,reason:{...(state||{}),timeout:true,message:'提交后8秒内未识别到成功回执，待申词记录确认'}};
 }
 const POST_TYPE=loadPostType();
 // 发文类型可配置：data/post_type.json（软件界面可改并记住），缺失/非法回退“解说混剪”。
@@ -432,7 +432,7 @@ async function runTripleWorkflow(c){
      if(status.state==='rejected'){state.platforms[alias][p.name]=status;failed=true;break}
      if(status.state==='absent'){
        const openStarted=Date.now(),opened=await (async()=>{try{return await openBookForPlatform(c,p,bookId,totalEpisodes)}catch(e){return {ok:false,reason:'打开书籍异常：'+String(e?.message||e)}}})();await perf('open_book',{book_id:bookId,alias,platform:p.name,duration_ms:Date.now()-openStarted,ok:opened.ok,reason:opened.reason,title_match:opened.title_match,episode_match:opened.episode_match});if(!opened.ok){state.platforms[alias][p.name]={state:'submit_failed',reason:opened.reason};transientFailure={platform:p.name,reason:opened.reason};break}
-       const submitStarted=Date.now(),submitted=await submitAlias(c,alias,bookId);await perf('submit_alias',{book_id:bookId,alias,platform:p.name,duration_ms:Date.now()-submitStarted,ok:submitted.ok,blocked:!!submitted.blocked,reason:submitted.ok?undefined:submitted.reason});
+       const submitStarted=Date.now();let submitted=await submitAlias(c,alias,bookId);await perf('submit_alias',{book_id:bookId,alias,platform:p.name,duration_ms:Date.now()-submitStarted,ok:submitted.ok,blocked:!!submitted.blocked,reason:submitted.ok?undefined:submitted.reason});
        if(submitted.blocked){
          state.platforms[alias][p.name]={state:'verification_required',reason:submitted.reason,detected_at:new Date().toISOString()};
          state.status='waiting_manual_verification';state.current_index=state.current_index;await recordAliasLedger(ledger,alias,'verification_required',bookId,{candidate_index:state.current_index,platform:p.name});await perf('verification_required',{book_id:bookId,alias,platform:p.name});await save();await lock.close();release();die('检测到任务台滑块/安全验证。已保留当前候选和进度，请人工完成验证后重新运行同一任务。',29);
@@ -443,6 +443,7 @@ async function runTripleWorkflow(c){
           // 记录也没有 → 才是真失败，换下一个候选。
           const verify=await checkAliasStatus(c,p,alias,bookId);
           if(verify.state==='pending'||verify.state==='approved'){submitted={ok:true,existing:true,state:verify,verified:true};await perf('submit_verified_via_ledger',{book_id:bookId,alias,platform:p.name,verify_state:verify.state})}
+          else if(verify.state==='absent'){await sleep(2000);const verify2=await checkAliasStatus(c,p,alias,bookId);if(verify2.state==='pending'||verify2.state==='approved'){submitted={ok:true,existing:true,state:verify2,verified:true};await perf('submit_verified_via_ledger',{book_id:bookId,alias,platform:p.name,verify_state:verify2.state})}}
         }
         if(!submitted.ok){const explicitDuplicate=!!submitted?.reason?.duplicate;state.platforms[alias][p.name]={state:explicitDuplicate?'duplicate':'submit_failed',reason:submitted.reason||submitted.state};failed=true;break}
         state.platforms[alias][p.name]={state:submitted.pending_visibility?'pending_visibility':(submitted.existing?'existing':'submitted'),submitted_at:new Date().toISOString(),platform_book_id:String(opened.platform_book_id||bookId),fallback_title_match:!!opened.fallback_title_match};await save();

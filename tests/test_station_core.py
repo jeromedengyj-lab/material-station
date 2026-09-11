@@ -1,4 +1,4 @@
-﻿"""素材准备站核心调度器回归测试。
+"""素材准备站核心调度器回归测试。
 
 覆盖：BookID 校验、队列串行、状态持久化、下载信息定位、候选生成写任务、
 三端别名退出码映射、删除/重试。全部通过 mock mjs 调用完成，不依赖 Chrome/Ollama。
@@ -867,9 +867,10 @@ def test_submit_alias_timeout_returns_failure_not_pending() -> None:
     assert "按失败处理" in text
     # nonSuccess 不得依赖 dialogOpen（提交后弹窗可能关闭，失败消息以全局 notification 出现）
     assert "nonSuccess=messages.some" in text, "nonSuccess 仍依赖 dialogOpen，弹窗关闭后失败消息会被漏判"
-    # 轮询时长至少 30 秒（60次*500ms）
-    assert "i<40" in text
-    assert "sleep(i<20?500:1000)" in text
+    # 成功回执轮询 8 秒（16次*500ms），超时返回 timeout 标记由申词记录兜底确认
+    assert "for(let i=0;i<16;i++){" in text
+    assert "await sleep(500);" in text
+    assert "timeout:true" in text
 
 
 def test_submit_alias_nonSuccess_regex_covers_common_failure_messages() -> None:
@@ -1103,3 +1104,20 @@ def test_success_detection_via_body_text_fallback() -> None:
     assert "success=messages.some(x=>x.includes('别名创建成功'))||bodyText.includes('别名创建成功')" in text
     # 宽选择器覆盖非 arco-modal 弹窗组件
     assert "[class*=popup],[class*=result]" in text
+
+def test_submit_ledger_fallback_no_const_reassign() -> None:
+    """申词记录兜底路径不允许对 const 重新赋值（曾因 const submitted 赋值触发
+    TypeError 崩溃导致卡死）；提交后 8 秒高频轮询 + timeout 标记 + 二次查询。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    # 根因回归：submitted 必须是 let（const 赋值必崩）
+    assert "let submitted=await submitAlias(" in text
+    assert "const submitStarted=Date.now(),submitted=" not in text
+    # 成功回执轮询 8 秒（16×500ms）
+    assert "let state;\n for(let i=0;i<16;i++){" in text
+    assert "timeout:true" in text
+    # 兜底二次查询（平台记录同步延迟）
+    assert "verify2" in text and "await sleep(2000)" in text
+    # 浏览器就绪等待循环保持 40 次（误改会导致冷启动等待不足）
+    assert "for(let i=0;i<40;i++){await sleep(500);try{await jget" in text
