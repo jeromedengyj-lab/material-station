@@ -247,7 +247,7 @@ async function submitAlias(c,alias,bookId){
  let state;
  for(let i=0;i<40;i++){
    if(await verificationChallenge(c))return {ok:false,blocked:true,reason:'检测到任务台滑块/安全验证，需要人工完成后从当前候选恢复'};
-   try{state=await ev(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),nonSuccess=messages.some(x=>/请勿重复|重复申请|已存在|失败|不通过|被驳回|已拒绝|不可用|不符合|违规|敏感/.test(x)),reject=(${REJECT_MATCH_JS})(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,nonSuccess,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`)}catch{await sleep(500);continue}
+   try{state=await safeEv(c,`(()=>{let d=${visibleDialog},visible=e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2},messages=[...document.querySelectorAll('[class*=message],[class*=notification],[role=alert],[role=dialog],.arco-modal')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean),targetText=d?.innerText||'',allText=[targetText,...messages].join('\n'),success=messages.some(x=>x.includes('别名创建成功')),nonSuccess=messages.some(x=>/请勿重复|重复申请|已存在|失败|不通过|被驳回|已拒绝|不可用|不符合|违规|敏感/.test(x)),reject=(${REJECT_MATCH_JS})(allText);return {messages:messages.slice(-20),dialogOpen:!!d,success,nonSuccess,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`)}catch{await sleep(500);continue}
    if(state.duplicate)return {ok:false,reason:state};
    if(state.success){try{await ev(c,`(()=>{let d=[...document.querySelectorAll('[role=dialog],.arco-modal')].find(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||'').includes('别名创建成功')}),b=d?.querySelector('svg[class*=close],[class*=close]');if(!b)return false;b.click();return true})()`)}catch{}await sleep(150);return {ok:true,state}}// 注意：已提交/审核中/提交成功/已申请 是平台的中转提示，绝不能当失败——否则成功弹窗前的“审核中”会误判失败，候选在第一个平台反复失败
    if(state.nonSuccess){return {ok:false,reason:{...state,message:'申请窗口未显示“别名创建成功”，按失败处理'}}}
@@ -436,6 +436,13 @@ async function runTripleWorkflow(c){
          state.platforms[alias][p.name]={state:'verification_required',reason:submitted.reason,detected_at:new Date().toISOString()};
          state.status='waiting_manual_verification';state.current_index=state.current_index;await recordAliasLedger(ledger,alias,'verification_required',bookId,{candidate_index:state.current_index,platform:p.name});await perf('verification_required',{book_id:bookId,alias,platform:p.name});await save();await lock.close();release();die('检测到任务台滑块/安全验证。已保留当前候选和进度，请人工完成验证后重新运行同一任务。',29);
        }
+        if(!submitted.ok&&!submitted.blocked){
+          // 成功弹窗可能因页面导航/重渲染没被轮询识别到（30秒超时误判失败），
+          // 先查申词记录兜底：平台已实际收到该别名（pending/approved）→ 按成功处理；
+          // 记录也没有 → 才是真失败，换下一个候选。
+          const verify=await checkAliasStatus(c,p,alias,bookId);
+          if(verify.state==='pending'||verify.state==='approved'){submitted={ok:true,existing:true,state:verify,verified:true};await perf('submit_verified_via_ledger',{book_id:bookId,alias,platform:p.name,verify_state:verify.state})}
+        }
         if(!submitted.ok){const explicitDuplicate=!!submitted?.reason?.duplicate;state.platforms[alias][p.name]={state:explicitDuplicate?'duplicate':'submit_failed',reason:submitted.reason||submitted.state};failed=true;break}
         state.platforms[alias][p.name]={state:submitted.pending_visibility?'pending_visibility':(submitted.existing?'existing':'submitted'),submitted_at:new Date().toISOString(),platform_book_id:String(opened.platform_book_id||bookId),fallback_title_match:!!opened.fallback_title_match};await save();
      }else state.platforms[alias][p.name]=status;

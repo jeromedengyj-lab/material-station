@@ -1077,3 +1077,18 @@ def test_post_type_combo_presets_all_platform_options() -> None:
                  "AIGC", "营销号", "沙雕漫", "AI数字人", "滚屏素材"]:
         assert item in seg, f"下拉缺少选项: {item}"
     assert "self.post_type_combo.setEditable(True)" in text
+
+def test_submit_success_via_ledger_fallback() -> None:
+    """提交后成功弹窗因页面导航没被轮询识别时，先查申词记录兜底：
+    平台已实际收到（pending/approved）→ 按成功继续下一平台，不再误判失败换候选；
+    轮询读取用 safeEv 重试（页面导航/重渲染销毁上下文自动重试）。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    # 轮询 state 读取带 safeEv 重试
+    assert "try{state=await safeEv(c,`(()=>{let d=${visibleDialog},visible=e=>{" in text
+    # 申词记录兜底：超时失败先查平台记录，pending/approved 视为成功
+    assert "if(!submitted.ok&&!submitted.blocked){" in text
+    assert "const verify=await checkAliasStatus(c,p,alias,bookId);" in text
+    assert "verify.state==='pending'||verify.state==='approved'" in text
+    assert "submitted={ok:true,existing:true,state:verify,verified:true}" in text

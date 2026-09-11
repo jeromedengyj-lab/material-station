@@ -1,1 +1,1 @@
-﻿FORCE_LICENSE = False
+FORCE_LICENSE = False
