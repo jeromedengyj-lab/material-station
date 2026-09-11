@@ -230,6 +230,7 @@ class StationCore:
         self.model_candidates = list(model_candidates)
         self.content_type = ""          # 全局默认内容类型：空=不限制（mjs 兜底漫剧），UI 可选 网文/漫剧/短剧
         self.expected_episodes = 0      # 全局默认期望集数：0=不限制
+        self.post_type = self._load_post_type()  # 发文类型（平台弹窗素材类型），默认解说混剪，可选并记住
         self._tasks: dict[str, StationTask] = {}
         self._queue: list[str] = []
         self._review_queue: list[str] = []  # 已提交三端、待统一审核的任务
@@ -817,6 +818,26 @@ class StationCore:
             raise ValueError(f"内容类型只支持 manju/wangwen/duanju，got: {type_key}")
         self.content_type = type_key
         self._save_state()
+
+    def _load_post_type(self) -> str:
+        """读取发文类型配置（data/post_type.json），缺失/非法回退「解说混剪」。"""
+        try:
+            data = json.loads((self.data_root / "post_type.json").read_text(encoding="utf-8"))
+            value = str((data or {}).get("post_type") or "").strip()
+            return value or "解说混剪"
+        except Exception:  # noqa: BLE001
+            return "解说混剪"
+
+    def set_post_type(self, value: str) -> None:
+        """设置发文类型并持久化到 data/post_type.json（下次打开保持）。"""
+        value = str(value or "").strip() or "解说混剪"
+        self.post_type = value
+        try:
+            (self.data_root / "post_type.json").write_text(
+                json.dumps({"post_type": value}, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def set_expected_episodes(self, episodes: int) -> None:
         """设置全局期望集数（0=不限制），用于同名同标签时精确区分。"""

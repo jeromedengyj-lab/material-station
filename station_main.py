@@ -446,6 +446,21 @@ def main() -> int:
             options_row.addStretch(1)
             layout.addLayout(options_row)
 
+            post_row = QHBoxLayout()
+            post_row.addWidget(QLabel("发文类型："))
+            self.post_type_combo = QComboBox()
+            self.post_type_combo.setEditable(True)
+            self.post_type_combo.addItem(core.post_type or "解说混剪")
+            self.post_type_combo.setCurrentText(core.post_type or "解说混剪")
+            self.post_type_combo.setToolTip(
+                "平台弹窗「请选择计划发文的素材类型」选的值；\n"
+                "可直接输入平台里存在的类型，选好后下次打开保持"
+            )
+            self.post_type_combo.editTextChanged.connect(self._on_post_type_changed)
+            post_row.addWidget(self.post_type_combo, 1)
+            post_row.addWidget(QLabel("（弹窗发文类型，默认解说混剪；选/填好后下次打开保持）"))
+            layout.addLayout(post_row)
+
             manual_row = QHBoxLayout()
             manual_row.addWidget(QLabel("手动别名："))
             self.manual_alias_input = QLineEdit()
@@ -519,6 +534,10 @@ def main() -> int:
             key = ["", "manju", "wangwen", "duanju"][index]
             core.set_content_type(key)
             self._append_log(f"内容类型：{['不限', '漫剧', '网文', '短剧'][index]}（同名时按此标签精确匹配；不限=不按类型过滤）")
+
+        def _on_post_type_changed(self, value: str) -> None:
+            core.set_post_type(value)
+            self._append_log(f"发文类型已设置：{core.post_type}")
 
         def _ocr_add(self) -> None:
             file_paths, _ = QFileDialog.getOpenFileNames(

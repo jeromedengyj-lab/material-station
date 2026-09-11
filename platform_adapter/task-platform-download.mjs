@@ -225,10 +225,10 @@ async function submitAlias(c,alias,bookId){
  if(!selectOpened)return {ok:false,reason:'当前弹窗找不到发文类型选择框'};
  let selected=false;
  for(let i=0;i<30&&!selected;i++){
-   selected=await ev(c,`(()=>{let a=[...document.querySelectorAll('[role=option],.arco-select-option,body *')].filter(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||e.textContent||'').trim()==='解说混剪'}).sort((x,y)=>x.children.length-y.children.length),e=a[0];if(!e)return false;try{e.click()}catch{}return true})()`);
+   selected=await ev(c,`(()=>{let a=[...document.querySelectorAll('[role=option],.arco-select-option,body *')].filter(e=>{let r=e.getBoundingClientRect();return r.width>2&&r.height>2&&(e.innerText||e.textContent||'').trim()===${JSON.stringify(POST_TYPE)}}).sort((x,y)=>x.children.length-y.children.length),e=a[0];if(!e)return false;try{e.click()}catch{}return true})()`);
    if(!selected)await sleep(100);
  }
- if(!selected)return {ok:false,reason:'当前可见下拉列表找不到“解说混剪”'};
+ if(!selected)return {ok:false,reason:`当前可见下拉列表找不到“${POST_TYPE}”`};
  let clicked=false;
  for(let i=0;i<40&&!clicked;i++){
    const formState=await ev(c,`(()=>{let d=${visibleDialog};if(!d)return {dialog:false};let alias=${JSON.stringify('ALIAS')},input=[...d.querySelectorAll('input')].find(e=>(e.placeholder||'').includes('请填写别名')),submit=[...d.querySelectorAll('button')].find(e=>(e.innerText||e.textContent||'').trim()==='提交'),text=d.innerText||'';let reject=(${REJECT_MATCH_JS})(text);return {dialog:true,aliasOk:input?.value===alias,typeOk:text.includes('解说混剪'),submitEnabled:!!submit&&!submit.disabled,duplicate:!!reject,rejectReason:reject?reject.source:''}})()`.replace('ALIAS',alias));
@@ -257,6 +257,17 @@ async function submitAlias(c,alias,bookId){
   // 按用户规则：申请窗口只要不是显示“别名创建成功”，都算申请失败。
   // 轮询30秒仍未看到成功回执，直接判失败，由三端循环换下一个别名从红果短剧重来。
   return {ok:false,reason:{...(state||{}),message:'提交后30秒内未看到“别名创建成功”回执，按失败处理'}};
+}
+const POST_TYPE=loadPostType();
+// 发文类型可配置：data/post_type.json（软件界面可改并记住），缺失/非法回退“解说混剪”。
+function loadPostType(){
+  try{
+    const cfgPath=path.join(ROOT,'post_type.json');
+    if(!fs.existsSync(cfgPath))return '解说混剪';
+    const cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'));
+    const v=String(cfg?.post_type||'').trim();
+    return v||'解说混剪';
+  }catch{return '解说混剪'}
 }
 const DEFAULT_PLATFORMS=[{name:'红果短剧',tab:6},{name:'番茄小说',tab:2},{name:'红果漫剧',tab:16}];
 // 平台列表可配置：data/platforms.json 写几个用几个（顺序即申请顺序）。
@@ -524,7 +535,7 @@ try{
      const before=a.length,r=await submitAlias(c,alias);await sleep(500);
      const responses=a.slice(before).map(x=>({url:new URL(x.url).pathname,status:x.status,code:x.json?.code,message:x.json?.message||x.json?.msg}));
      const ok=r.ok;
-     records.push({alias,post_type:'解说混剪',ok,responses});console.log(`${ok?'申请已提交':'申请失败'}：${alias} / 解说混剪`);
+     records.push({alias,post_type:POST_TYPE,ok,responses});console.log(`${ok?'申请已提交':'申请失败'}：${alias} / ${POST_TYPE}`);
      if(!ok){await fsp.writeFile(path.join(TOOL,'关键词申请诊断.json'),JSON.stringify({alias,result:r,responses},null,2),'utf8');die(`关键词“${alias}”提交后未确认成功，已停止后续申请。`,20)}
      await fsp.writeFile(recordFile,JSON.stringify({title,book_id:String(book.book_id),updated_at:new Date().toISOString(),records},null,2),'utf8');
    }

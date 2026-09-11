@@ -1040,3 +1040,28 @@ def test_openbook_safeev_no_crash() -> None:
     assert "try{return await openBookForPlatform(c,p,bookId,totalEpisodes)}catch" in text
     # 崩溃后不丢进度：while 循环每次候选开始都有 save
     assert "await save();let failed=false,transientFailure=null" in text
+
+def test_post_type_configurable_and_persisted() -> None:
+    """发文类型可配置且持久化：界面可改（默认解说混剪），写入 data/post_type.json，
+    下次打开恢复；mjs 读取该配置，不再硬编码「解说混剪」。"""
+    import tempfile, json
+    from pathlib import Path
+    from station_core import StationCore
+    root = Path(tempfile.mkdtemp())
+    core = StationCore(root)
+    assert core.post_type == "解说混剪"  # 默认
+    core.set_post_type("原创实拍")
+    assert core.post_type == "原创实拍"
+    saved = json.loads((root / "data" / "post_type.json").read_text(encoding="utf-8"))
+    assert saved["post_type"] == "原创实拍"
+    # 重新初始化恢复
+    core2 = StationCore(root)
+    assert core2.post_type == "原创实拍"
+    # mjs 侧：读配置 + 匹配用 POST_TYPE，不写死
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    assert "function loadPostType" in text and "POST_TYPE=loadPostType()" in text
+    assert "post_type.json" in text
+    assert "JSON.stringify(POST_TYPE)" in text
+    # 弹窗找不到文案也随配置
+    assert "${POST_TYPE}" in text
