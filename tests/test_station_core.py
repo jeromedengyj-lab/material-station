@@ -1092,3 +1092,14 @@ def test_submit_success_via_ledger_fallback() -> None:
     assert "const verify=await checkAliasStatus(c,p,alias,bookId);" in text
     assert "verify.state==='pending'||verify.state==='approved'" in text
     assert "submitted={ok:true,existing:true,state:verify,verified:true}" in text
+
+def test_success_detection_via_body_text_fallback() -> None:
+    """成功弹窗组件不固定（可能不是 dialog/modal class），轮询用页面正文全文兜底：
+    弹窗一出现立即识别，避免等满 30 秒超时再靠申词记录兜底（浪费时间）。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    assert "bodyText=document.body.innerText||''" in text
+    assert "success=messages.some(x=>x.includes('别名创建成功'))||bodyText.includes('别名创建成功')" in text
+    # 宽选择器覆盖非 arco-modal 弹窗组件
+    assert "[class*=popup],[class*=result]" in text
