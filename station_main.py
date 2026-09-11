@@ -42,6 +42,8 @@ def build_uninstall_bat(exe_dir: str, keep_data: bool = True) -> str:
     if not keep_data:
         lines.append(f'rd /s /q "{exe_dir}\\data" >nul 2>&1')
         lines.append(f'rd /s /q "{exe_dir}" >nul 2>&1')
+        # 浏览器登录态缓存（%LOCALAPPDATA%\\素材准备站）也一并清掉，彻底卸载
+        lines.append('rd /s /q "%LOCALAPPDATA%\\素材准备站" >nul 2>&1')
     lines.append('del /q "%~f0" >nul 2>&1')
     return "\r\n".join(lines) + "\r\n"
 

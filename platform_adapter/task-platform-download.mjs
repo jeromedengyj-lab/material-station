@@ -26,10 +26,20 @@ const requestedBrowserRole=browserRoleIndex>=0?String(argv[browserRoleIndex+1]||
 const BROWSER_ROLE=requestedBrowserRole||((argv.includes('--triple-platform'))?'alias':'download');
 if(!['download','alias'].includes(BROWSER_ROLE))throw new Error('browser-role 必须为 download 或 alias');
 // 下载保留既有登录目录；别名使用独立目录和端口，避免两个并行任务争用同一 Chrome profile。
-const PROFILE_NAME=BROWSER_ROLE==='alias'?`任务台Chrome-${safe(os.hostname())}-别名`:`任务台Chrome-${safe(os.hostname())}`;
+// 登录态固定存到 %LOCALAPPDATA%\素材准备站\browser_profiles（运行目录之外），
+// 更新版本（删掉运行目录换新）不会丢失任务台登录。
 const APP_ROOT=String(process.env.MANJU_TOOL_ROOT||'D:\\漫剧剪辑工具').trim();
-const TOOL=APP_ROOT;
-const PROFILE=path.join(APP_ROOT,'runtime','browser_profiles',PROFILE_NAME);
+const PROFILE_NAME=BROWSER_ROLE==='alias'?`任务台Chrome-${safe(os.hostname())}-别名`:`任务台Chrome-${safe(os.hostname())}`;
+const PERSIST_PROFILE_ROOT=path.join(process.env.LOCALAPPDATA||APP_ROOT,'素材准备站','browser_profiles');
+const LEGACY_PROFILE_ROOT=path.join(APP_ROOT,'runtime','browser_profiles');
+try{
+  // 一次性迁移旧登录态：旧版本把 profile 放在运行目录 runtime 下，更新删目录会被清掉
+  if(fs.existsSync(LEGACY_PROFILE_ROOT)&&!fs.existsSync(PERSIST_PROFILE_ROOT)){
+    fs.mkdirSync(path.dirname(PERSIST_PROFILE_ROOT),{recursive:true});
+    fs.renameSync(LEGACY_PROFILE_ROOT,PERSIST_PROFILE_ROOT);
+  }
+}catch{}
+const PROFILE=path.join(PERSIST_PROFILE_ROOT,PROFILE_NAME);
 const requestedOutputDir=argValue('--output-dir').trim();
 const requestedCoverDir=argValue('--cover-output-dir').trim();
 const OUTPUT=path.resolve(requestedOutputDir||path.join(ROOT,'选剧文件夹','原剧视频'));

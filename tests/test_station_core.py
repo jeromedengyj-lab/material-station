@@ -935,6 +935,26 @@ def test_build_uninstall_bat() -> None:
     assert "data" not in keep
     full = build_uninstall_bat(r"D:\漫剧剪辑工具\素材准备站", keep_data=False)
     assert "data" in full
-    assert full.count("rd /s /q") == 5  # + data + 整个运行目录（彻底卸载）
+    assert full.count("rd /s /q") == 6  # + data + 整个运行目录 + LOCALAPPDATA 登录态缓存
     keep.encode("gbk")
     full.encode("gbk")
+
+def test_browser_profile_persists_outside_run_dir() -> None:
+    """浏览器登录态必须存到运行目录之外（%LOCALAPPDATA%\\素材准备站），更新删目录不丢登录；
+    并保留一次性迁移旧 profile 的逻辑。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    assert "PERSIST_PROFILE_ROOT" in text and "LOCALAPPDATA" in text
+    assert "LEGACY_PROFILE_ROOT" in text
+    assert "renameSync" in text  # 旧 profile 一次性迁移
+    assert "PROFILE_NAME" in text
+
+
+def test_uninstall_full_mode_clears_login_cache() -> None:
+    """彻底卸载模式必须同时删除 %LOCALAPPDATA%\\素材准备站（浏览器登录态缓存）。"""
+    from station_main import build_uninstall_bat
+    full = build_uninstall_bat(r"D:\漫剧剪辑工具\素材准备站", keep_data=False)
+    assert "%LOCALAPPDATA%\\素材准备站" in full
+    keep = build_uninstall_bat(r"D:\漫剧剪辑工具\素材准备站", keep_data=True)
+    assert "LOCALAPPDATA" not in keep  # 保留模式不删登录态，重装免登录
