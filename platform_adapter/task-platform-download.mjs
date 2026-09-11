@@ -33,10 +33,12 @@ const PROFILE_NAME=BROWSER_ROLE==='alias'?`任务台Chrome-${safe(os.hostname())
 const PERSIST_PROFILE_ROOT=path.join(process.env.LOCALAPPDATA||APP_ROOT,'素材准备站','browser_profiles');
 const LEGACY_PROFILE_ROOT=path.join(APP_ROOT,'runtime','browser_profiles');
 try{
-  // 一次性迁移旧登录态：旧版本把 profile 放在运行目录 runtime 下，更新删目录会被清掉
+  // 一次性迁移旧登录态：旧版本把 profile 放在运行目录 runtime 下，更新删目录会被清掉。
+  // 注意用 cpSync+rmSync 而非 renameSync：运行目录在 D 盘、%LOCALAPPDATA% 在 C 盘，跨盘 rename 会抛 EXDEV 失败。
   if(fs.existsSync(LEGACY_PROFILE_ROOT)&&!fs.existsSync(PERSIST_PROFILE_ROOT)){
     fs.mkdirSync(path.dirname(PERSIST_PROFILE_ROOT),{recursive:true});
-    fs.renameSync(LEGACY_PROFILE_ROOT,PERSIST_PROFILE_ROOT);
+    fs.cpSync(LEGACY_PROFILE_ROOT,PERSIST_PROFILE_ROOT,{recursive:true});
+    fs.rmSync(LEGACY_PROFILE_ROOT,{recursive:true,force:true});
   }
 }catch{}
 const PROFILE=path.join(PERSIST_PROFILE_ROOT,PROFILE_NAME);

@@ -947,7 +947,7 @@ def test_browser_profile_persists_outside_run_dir() -> None:
     text = mjs.read_text(encoding="utf-8")
     assert "PERSIST_PROFILE_ROOT" in text and "LOCALAPPDATA" in text
     assert "LEGACY_PROFILE_ROOT" in text
-    assert "renameSync" in text  # 旧 profile 一次性迁移
+    assert "cpSync" in text and "rmSync" in text  # 旧 profile 一次性迁移（跨盘安全：复制+删除，非 rename）
     assert "PROFILE_NAME" in text
 
 
