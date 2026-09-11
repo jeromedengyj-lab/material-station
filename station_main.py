@@ -301,7 +301,7 @@ def main() -> int:
         QPlainTextEdit, QHeaderView, QMessageBox, QComboBox, QCheckBox,
         QFileDialog,
     )
-    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtCore import Qt, QTimer, Signal
 
     # 独立仓库：station_core.py 与 station_main.py 同目录（开发/打包一致）
     from station_core import (
@@ -322,6 +322,9 @@ def main() -> int:
     app.setApplicationName(f"素材准备站{STATION_VERSION}")
 
     class StationWindow(QMainWindow):
+        # 后台线程进度回调经信号投递到主线程（QTimer.singleShot 跨线程会投递到无事件循环的
+        # 后台线程导致回调永不执行、日志丢失——用户误以为任务卡住）
+        progress_signal = Signal(str, str, str)
         _STATUS_TEXT = {
             STATUS_QUEUED: "排队中",
             STATUS_DOWNLOADING: "下载原剧+封面",
@@ -344,7 +347,8 @@ def main() -> int:
             self._tick_timer = QTimer(self)
             self._tick_timer.timeout.connect(self._on_tick)
             self._tick_timer.start(2000)
-            core.set_progress_callback(self._on_progress)
+            self.progress_signal.connect(self._on_progress_ui)
+            core.set_progress_callback(self._on_progress_emit)
             self._refresh_tasks()
             self._append_log(f"素材准备站{STATION_VERSION} 已启动")
             self._append_log(f"数据目录：{core.data_root}")
@@ -822,10 +826,15 @@ def main() -> int:
             )
 
         # ---------- 更新 ----------
-        def _on_progress(self, book_id: str, status: str, detail: str) -> None:
-            # 回调在后台线程执行，UI 操作需 marshal 到主线程
+        def _on_progress_emit(self, book_id: str, status: str, detail: str) -> None:
+            # 后台线程调用：只发信号，不做任何 UI 操作（线程安全）
+            self.progress_signal.emit(book_id, status, detail)
+
+        def _on_progress_ui(self, book_id: str, status: str, detail: str) -> None:
+            # 主线程槽：追加日志 + 刷新列表
             text = f"[{book_id}] {self._STATUS_TEXT.get(status, status)}：{detail}"
-            QTimer.singleShot(0, lambda: (self._append_log(text), self._refresh_tasks()))
+            self._append_log(text)
+            self._refresh_tasks()
 
         def _refresh_tasks(self) -> None:
             tasks = core.tasks

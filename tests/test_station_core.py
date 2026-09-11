@@ -1121,3 +1121,18 @@ def test_submit_ledger_fallback_no_const_reassign() -> None:
     assert "verify2" in text and "await sleep(2000)" in text
     # 浏览器就绪等待循环保持 40 次（误改会导致冷启动等待不足）
     assert "for(let i=0;i<40;i++){await sleep(500);try{await jget" in text
+
+
+def test_progress_logging_via_signal_not_timer() -> None:
+    """后台线程进度日志必须经 Qt 信号投递主线程：QTimer.singleShot 从后台线程调用
+    会投递到无事件循环的线程导致回调永不执行、日志全部丢失（用户误以为任务卡住）。"""
+    from pathlib import Path
+    main = Path(__file__).resolve().parent.parent / "station_main.py"
+    text = main.read_text(encoding="utf-8")
+    assert "from PySide6.QtCore import Qt, QTimer, Signal" in text
+    assert "progress_signal = Signal(str, str, str)" in text
+    assert "self.progress_signal.connect(self._on_progress_ui)" in text
+    assert "core.set_progress_callback(self._on_progress_emit)" in text
+    assert "def _on_progress_emit" in text and "def _on_progress_ui" in text
+    # 不得再用 QTimer.singleShot 跨线程投递日志（历史丢失根因）
+    assert "QTimer.singleShot(0, lambda: (self._append_log(text), self._refresh_tasks()))" not in text
