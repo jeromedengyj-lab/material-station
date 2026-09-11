@@ -188,13 +188,35 @@ def _tool_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _license_dir() -> Path:
+    """激活信息独立存放目录（%LOCALAPPDATA%\素材准备站，与浏览器登录态同级）。
+
+    放这里而不是软件目录 data 目录下：升级/覆盖/重装软件时激活状态与剩余
+    授权时长都能继承，不会要求重新输入密钥。"""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    directory = Path(base) / "素材准备站"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return directory
+
+
+def _license_dir_has_flag(data_dir: Path) -> bool:
+    # 新位置（AppData，独立于软件目录）优先；旧位置（data\）兼容早期已激活用户
+    if (_license_dir() / "licensed_mode.flag").is_file():
+        return True
+    return (data_dir / "licensed_mode.flag").is_file()
+
+
 def _license_required(data_dir: Path) -> bool:
+
     """是否必须激活才能使用。
 
     优先级：data\\licensed_mode.flag（已安装/已激活）→ 环境变量 MANJU_FORCE_LICENSE
     → 构建常量 _build_config.FORCE_LICENSE（安装包资源为 True，绿色版为 False）。
     """
-    if (data_dir / "licensed_mode.flag").is_file():
+    if _license_dir_has_flag(data_dir):
         return True
     env = str(os.environ.get("MANJU_FORCE_LICENSE", "") or "").strip().lower()
     if env in ("1", "true", "yes"):
@@ -220,15 +242,29 @@ def _ensure_license(data_dir: Path) -> bool:
     from license_utils import get_device_code, key_status
 
     device_code = get_device_code()
-    license_file = data_dir / "license.dat"
+    license_file = _license_dir() / "license.dat"
+    legacy_file = data_dir / "license.dat"
     saved: dict = {}
-    try:
-        saved = _json.loads(license_file.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        saved = {}
-    saved_status, saved_expiry = key_status(device_code, str(saved.get("key", "")))
-    if str(saved.get("device_code", "")).upper() == device_code and saved_status == "valid":
-        return True
+    # 新位置优先；旧位置（data\license.dat）存在则读取，校验通过自动迁移到新位置（升级继承）
+    for candidate in (license_file, legacy_file):
+        try:
+            saved = _json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            saved = {}
+        saved_status, saved_expiry = key_status(device_code, str(saved.get("key", "")))
+        if str(saved.get("device_code", "")).upper() == device_code and saved_status == "valid":
+            if candidate is not license_file:
+                # 迁移到新位置，此后升级/覆盖都不再丢激活
+                try:
+                    license_file.write_text(
+                        _json.dumps({"device_code": device_code, "key": str(saved.get("key", ""))}, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    (_license_dir() / "licensed_mode.flag").write_text("1", encoding="utf-8")
+                except OSError:
+                    pass
+            return True
+    saved = {}
 
     dialog = QDialog()
     dialog.setWindowTitle("素材准备站 · 激活")
@@ -269,7 +305,7 @@ def _ensure_license(data_dir: Path) -> bool:
                 _json.dumps({"device_code": device_code, "key": key}, ensure_ascii=False),
                 encoding="utf-8",
             )
-            (data_dir / "licensed_mode.flag").write_text("1", encoding="utf-8")
+            (_license_dir() / "licensed_mode.flag").write_text("1", encoding="utf-8")
         except OSError as error:
             QMessageBox.critical(dialog, "写入失败", f"无法写入激活信息：{error}")
             return

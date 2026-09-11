@@ -1136,3 +1136,21 @@ def test_progress_logging_via_signal_not_timer() -> None:
     assert "def _on_progress_emit" in text and "def _on_progress_ui" in text
     # 不得再用 QTimer.singleShot 跨线程投递日志（历史丢失根因）
     assert "QTimer.singleShot(0, lambda: (self._append_log(text), self._refresh_tasks()))" not in text
+
+
+def test_license_inherited_across_upgrade_via_localappdata() -> None:
+    """激活信息必须存到 %LOCALAPPDATA%\素材准备站（与浏览器登录态同级），
+    升级/覆盖软件目录后仍继承激活状态与剩余授权时长，不要求重输密钥；
+    同时兼容读取旧位置 data 下 license.dat 并自动迁移。"""
+    from pathlib import Path
+    main = Path(__file__).resolve().parent.parent / "station_main.py"
+    text = main.read_text(encoding="utf-8")
+    assert "def _license_dir()" in text
+    assert 'os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")' in text
+    assert '_license_dir() / "license.dat"' in text
+    assert '_license_dir() / "licensed_mode.flag"' in text
+    # 旧位置兼容迁移
+    assert 'legacy_file = data_dir / "license.dat"' in text
+    assert "for candidate in (license_file, legacy_file):" in text
+    # 不再把激活信息写进软件目录 data
+    assert '(data_dir / "licensed_mode.flag").write_text' not in text
