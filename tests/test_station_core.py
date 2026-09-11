@@ -905,15 +905,22 @@ def test_platforms_config_driven_mjs() -> None:
     # --probe-platforms 自动探测内容库菜单
     assert "--probe-platforms" in text
     assert "tab_type=(\\d+)" in text
+    # platforms.json 支持 // 行注释 与 /* 块注释，且不会误删字符串里的冒号
+    assert "stripJsonComments" in text
+    assert "s.replace(/\\/\\*[\\s\\S]*?\\*\\//g,'')" in text
 
 
 def test_platforms_json_contains_tomato_ting() -> None:
-    """data/platforms.json 必须包含 4 个平台，番茄畅听 tab=3。"""
+    """data/platforms.json 必须包含 4 个平台，番茄畅听 tab=3；文件允许 // 注释。"""
     import json
+    import re
     from pathlib import Path
     p = Path(r"D:\漫剧剪辑工具\素材准备站\data\platforms.json")
     assert p.is_file(), "缺少 data/platforms.json"
-    cfg = json.loads(p.read_text(encoding="utf-8"))
+    raw = p.read_text(encoding="utf-8")
+    cleaned = re.sub(r"/\*[\s\S]*?\*/", "", raw)
+    cleaned = re.sub(r"(^|[^:])\/\/.*$", "\\1", cleaned, flags=re.M)
+    cfg = json.loads(cleaned)
     assert isinstance(cfg, list) and len(cfg) == 4
     by_name = {x["name"]: x["tab"] for x in cfg}
     assert by_name == {"红果短剧": 6, "番茄小说": 2, "番茄畅听": 3, "红果漫剧": 16}

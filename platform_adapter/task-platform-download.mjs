@@ -248,11 +248,17 @@ const DEFAULT_PLATFORMS=[{name:'红果短剧',tab:6},{name:'番茄小说',tab:2}
 // 平台列表可配置：data/platforms.json 写几个用几个（顺序即申请顺序）。
 // 每条 {name, tab, marker?}：tab=内容库/申词记录菜单 URL 的 tab_type 值；
 // marker=卡片/申词记录里必须包含的标识词，缺省“漫剧”，填“*”表示不限制。
+// 文件里支持 // 行注释 与 /* 块注释，方便标注说明。
+function stripJsonComments(s){
+  s=s.replace(/\/\*[\s\S]*?\*\//g,'');
+  s=s.replace(/(^|[^:])\/\/.*$/gm,'$1');
+  return s;
+}
 function loadPlatforms(){
   try{
     const cfgPath=path.join(ROOT,'platforms.json');
     if(!fs.existsSync(cfgPath))return DEFAULT_PLATFORMS;
-    const cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'));
+    const cfg=JSON.parse(stripJsonComments(fs.readFileSync(cfgPath,'utf8')));
     const list=Array.isArray(cfg)?cfg:(Array.isArray(cfg?.platforms)?cfg.platforms:null);
     if(!Array.isArray(list)||list.length===0)return DEFAULT_PLATFORMS;
     const out=[];
