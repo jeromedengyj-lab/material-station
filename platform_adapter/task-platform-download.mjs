@@ -298,12 +298,22 @@ async function clickPlatformRoute(c,route,tab){
  const ok=await ev(c,`(()=>{let part=${JSON.stringify(`/page/member/${route}?tab_type=${tab}`)},a=[...document.querySelectorAll('a[href]')].find(e=>(e.getAttribute('href')||'').includes(part));if(!a)return false;a.click();return true})()`);
  if(!ok)return false;return waitLocation(c,`/${route}?tab_type=${tab}`);
 }
+async function collectCandidates(c,platform,bookId,title,totalEpisodes){
+  const q=JSON.stringify(title),ep=Number(totalEpisodes)||0,marker=String(platform.marker||'漫剧');
+  const expr=`(()=>{let norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${q}),ep=${ep},buttons=[...document.querySelectorAll('button,[role=button]')].filter(b=>(b.innerText||b.textContent||'').trim()==='别名推广'),out=[];for(let n=0;n<buttons.length;n++){let b=buttons[n],x=b;for(let j=0;j<16&&x;j++,x=x.parentElement){let t=(x.innerText||'').trim();if(t.includes(${JSON.stringify(marker)})&&t.length<1200){let exact=[x,...x.querySelectorAll('*')].some(e=>norm(e.innerText||e.textContent||'')===q);out.push({index:n,title_match:exact,episode_match:!ep||t.includes(ep+'集'),text:t.slice(0,800)});break}}}return out.sort((a,b)=>Number(b.title_match)-Number(a.title_match)||Number(b.episode_match)-Number(a.episode_match))})()`;
+  // 搜索后页面可能正处于导航/渲染中（上下文销毁会抛 "Uncaught"），只读查询失败则等待重试
+  for(let a=0;a<4;a++){
+    try{return await ev(c,expr)}catch{await sleep(300)}
+  }
+  return [];
+}
 async function openBookForPlatform(c,platform,bookId,totalEpisodes=0){
  if(!await clickPlatformRoute(c,'content',platform.tab))return {ok:false,reason:`找不到${platform.name}内容库菜单`};
  if(!await waitSearch(c))return {ok:false,reason:`${platform.name}没有搜索框`};
  if(!await search(c,String(bookId)))return {ok:false,reason:`${platform.name}按BookID搜索失败`};
+ await sleep(1200); // 等搜索结果渲染稳定，避免搜索引发的页面导航/重渲染在查询时销毁执行上下文
  for(let i=0;i<80;i++){
-   const candidates=await ev(c,`(()=>{let norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\\s,，.。!！?？:：;；、《》「」『』（）()【】\\[\\]~～\\-—_]/g,'').trim(),q=norm(${JSON.stringify(title)}),ep=${Number(totalEpisodes)||0},buttons=[...document.querySelectorAll('button,[role=button]')].filter(b=>(b.innerText||b.textContent||'').trim()==='别名推广'),out=[];for(let n=0;n<buttons.length;n++){let b=buttons[n],x=b;for(let j=0;j<16&&x;j++,x=x.parentElement){let t=(x.innerText||'').trim();if(t.includes(platform.marker)&&t.length<1200){let exact=[x,...x.querySelectorAll('*')].some(e=>norm(e.innerText||e.textContent||'')===q);out.push({index:n,title_match:exact,episode_match:!ep||t.includes(ep+'集'),text:t.slice(0,800)});break}}}return out.sort((a,b)=>Number(b.title_match)-Number(a.title_match)||Number(b.episode_match)-Number(a.episode_match))})()`);
+   const candidates=await collectCandidates(c,platform,bookId,title,totalEpisodes);
    if(candidates.length){
      for(const candidate of candidates){
        const clicked=await ev(c,`(()=>{let b=[...document.querySelectorAll('button,[role=button]')].filter(e=>(e.innerText||e.textContent||'').trim()==='别名推广')[${Number(candidate.index)}];if(!b)return false;b.scrollIntoView({block:'center'});try{b.click()}catch{}return true})()`);

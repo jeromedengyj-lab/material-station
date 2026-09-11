@@ -900,7 +900,9 @@ def test_platforms_config_driven_mjs() -> None:
     # 配置缺失/非法回退默认
     assert "return DEFAULT_PLATFORMS" in text
     # 卡片与申词记录判断必须用 platform.marker，不再写死“漫剧”
-    assert "t.includes(platform.marker)" in text
+    # （openBookForPlatform 候选收集抽到 collectCandidates，marker 取自 platform.marker）
+    assert "platform.marker" in text
+    assert "t.includes(" in text.split("async function collectCandidates")[1].split("async function openBookForPlatform")[0]
     assert "marker==='*'||" in text
     # --probe-platforms 自动探测内容库菜单
     assert "--probe-platforms" in text
@@ -958,3 +960,16 @@ def test_uninstall_full_mode_clears_login_cache() -> None:
     assert "%LOCALAPPDATA%\\素材准备站" in full
     keep = build_uninstall_bat(r"D:\漫剧剪辑工具\素材准备站", keep_data=True)
     assert "LOCALAPPDATA" not in keep  # 保留模式不删登录态，重装免登录
+
+def test_openbook_wait_and_retry_guard() -> None:
+    """openBookForPlatform：搜索后等待页面稳定（sleep 1200），候选收集失败自动重试（防止
+    搜索引发页面导航/重渲染导致上下文销毁抛 Uncaught 而整任务崩溃）。"""
+    from pathlib import Path
+    mjs = Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs"
+    text = mjs.read_text(encoding="utf-8")
+    assert "collectCandidates" in text
+    assert "sleep(1200)" in text  # 搜索后等渲染稳定
+    assert "for(let a=0;a<4;a++)" in text  # 只读查询失败重试（无副作用）
+    # 收集逻辑只读：不含 click
+    seg = text.split("async function collectCandidates")[1].split("async function openBookForPlatform")[0]
+    assert ".click" not in seg
