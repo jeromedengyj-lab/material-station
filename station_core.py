@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+import socket
 import urllib.request
 
 # 三端别名候选模型优先级（与主程序 hook_text.py 常量一致；独立软件打包只带最小模型）
@@ -133,7 +134,58 @@ def terminate_active_procs(grace: float = 3.0) -> int:
     return killed
 
 
+# ---------- 浏览器账号（登录态管理，profile 持久化在 %LOCALAPPDATA%\素材准备站\browser_profiles） ----------
+def browser_profile_dir(tool_root: str | Path, role: str) -> Path:
+    """角色对应持久登录 profile 目录（与 task-platform-download.mjs 命名一致）。
+
+    role: "download"=原剧下载 / "alias"=别名申请（两个独立登录态，互不干扰）。
+    """
+    base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")) / "素材准备站" / "browser_profiles"
+    host = _safe_profile_name(socket.gethostname())
+    name = f"任务台Chrome-{host}-别名" if role == "alias" else f"任务台Chrome-{host}"
+    return base / name
+
+
+def _safe_profile_name(value: str) -> str:
+    # 与 mjs 的 safe() 一致：非法字符替换为 _，去尾部 . 与空格，截 120
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value))
+    text = re.sub(r"[. ]+$", "", text)
+    return text[:120] or "未命名"
+
+
+def browser_login_status(tool_root: str | Path, role: str) -> dict:
+    """角色登录状态：Cookies 最后写入时间（Windows Chrome 位于 Default 目录下 Network/Cookies）。"""
+    profile = browser_profile_dir(tool_root, role)
+    cookies = None
+    for candidate in (profile / "Default" / "Network" / "Cookies", profile / "Default" / "Cookies"):
+        if candidate.is_file():
+            cookies = candidate
+            break
+    return {
+        "role": role,
+        "profile": str(profile),
+        "has_login": cookies is not None,
+        "cookies_mtime": time.strftime("%m-%d %H:%M", time.localtime(cookies.stat().st_mtime)) if cookies else "",
+    }
+
+
+def clear_browser_login(tool_root: str | Path, role: str) -> None:
+    """清空角色登录态（删除 Cookies/Login Data），下次打开需重新登录。"""
+    profile = browser_profile_dir(tool_root, role)
+    if not profile.is_dir():
+        return
+    for root, _dirs, files in os.walk(profile):
+        for f in files:
+            low = f.lower()
+            if low == "cookies" or low.startswith("cookies-") or low.startswith("login data"):
+                try:
+                    (Path(root) / f).unlink()
+                except OSError:
+                    pass
+
+
 def platform_count(tool_root: str | Path) -> int:
+
     """读取 data/platforms.json 的平台数量（与 mjs loadPlatforms 同源，剥注释）。
 
     写几个平台就用几个（顺序即申请顺序）；文件缺失/非法时回退 3。

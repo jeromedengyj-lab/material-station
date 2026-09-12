@@ -151,7 +151,7 @@ async function verificationChallenge(c){
  try{return await ev(c,`(()=>{const visible=e=>{const r=e.getBoundingClientRect();return r.width>2&&r.height>2},text=[...document.querySelectorAll('body *')].filter(visible).map(e=>(e.innerText||e.textContent||'').trim()).filter(Boolean).join('\\n');return /请完成下列验证后继续|拖动完成上方拼图|滑块验证|安全验证/.test(text)})()`)}catch{return false}
 }
 const hasSearch=c=>ev(c,`[...document.querySelectorAll('input')].some(e=>{let r=e.getBoundingClientRect(),t=e.placeholder||e.getAttribute('aria-label')||'';return r.width>40&&r.height>10&&!e.disabled&&/搜索|剧名|书名|关键词/.test(t)})`);
-async function waitSearch(c){for(let i=0;i<180;i++){if(await hasSearch(c))return true;if(i===3)console.log('请在普通 Chrome 中登录，并进入可按剧名搜索的内容库页面，工具会自动继续。');await sleep(1000)}return false}
+async function waitSearch(c){for(let i=0;i<180;i++){if(await hasSearch(c))return true;if(i===3)console.log('请在打开的窗口中登录，并进入可按剧名搜索的内容库页面，工具会自动继续。');await sleep(1000)}return false}
 function collect(c){const a=[];c.on('Network.responseReceived',async p=>{if(!/\/api\/platform\/content\//.test(p.response.url))return;try{await sleep(100);const b=await c.send('Network.getResponseBody',{requestId:p.requestId}),s=b.base64Encoded?Buffer.from(b.body,'base64').toString():b.body;a.push({url:p.response.url,status:p.response.status,json:JSON.parse(s)})}catch{}});return a}
 async function wait(a,f,ms=30000,startIndex=0){const t=Date.now();while(Date.now()-t<ms){for(let i=a.length-1;i>=startIndex;i--)if(f(a[i]))return a[i];await sleep(250)}return null}
 const unwrap=x=>x?.data?.data??x?.data??x;

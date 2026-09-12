@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from pathlib import Path
@@ -361,6 +362,7 @@ def main() -> int:
         # 后台线程进度回调经信号投递到主线程（QTimer.singleShot 跨线程会投递到无事件循环的
         # 后台线程导致回调永不执行、日志丢失——用户误以为任务卡住）
         progress_signal = Signal(str, str, str)
+        account_signal = Signal(str)  # 浏览器账号区日志（后台线程经信号投递主线程）
         _STATUS_TEXT = {
             STATUS_QUEUED: "排队中",
             STATUS_DOWNLOADING: "下载原剧+封面",
@@ -384,6 +386,7 @@ def main() -> int:
             self._tick_timer.timeout.connect(self._on_tick)
             self._tick_timer.start(2000)
             self.progress_signal.connect(self._on_progress_ui)
+            self.account_signal.connect(self._on_account_msg)
             core.set_progress_callback(self._on_progress_emit)
             self._refresh_tasks()
             self._append_log(f"素材准备站{STATION_VERSION} 已启动")
@@ -441,12 +444,46 @@ def main() -> int:
             ocr_btn.setToolTip("选择剧图，识别图中的剧名/集数/标签后填入上方（可修正），再点「添加任务」")
             ocr_btn.clicked.connect(self._ocr_add)
             top.addWidget(ocr_btn)
+            account_btn = QPushButton("浏览器账号")
+            account_btn.setCheckable(True)
+            account_btn.setToolTip("展开账号设置：管理任务台登录态（原剧下载 / 别名申请 两个独立账号）")
+            account_btn.clicked.connect(self._toggle_account_panel)
+            top.addWidget(account_btn)
             uninstall_btn = QPushButton("卸载软件")
             uninstall_btn.setToolTip("一键卸载：关闭进程并删除程序本体（可保留任务数据）。更新版本前可先用它清理")
             uninstall_btn.setStyleSheet("color:#C0392B;")
             uninstall_btn.clicked.connect(self._uninstall)
             top.addWidget(uninstall_btn)
             layout.addLayout(top)
+
+            # ---- 浏览器账号设置面板（展开式，默认收起，不影响现有功能） ----
+            self.account_panel = QWidget()
+            self.account_panel.setVisible(False)
+            account_layout = QVBoxLayout(self.account_panel)
+            account_layout.setContentsMargins(0, 4, 0, 4)
+            self._account_rows: dict[str, QLabel] = {}
+            for role, label in (("download", "原剧下载"), ("alias", "别名申请")):
+                row = QHBoxLayout()
+                row.addWidget(QLabel(f"{label}："))
+                status_label = QLabel("")
+                status_label.setMinimumWidth(240)
+                row.addWidget(status_label)
+                login_btn = QPushButton("打开登录页")
+                login_btn.setToolTip("用该角色独立浏览器打开任务台登录页，登录后自动保存登录态（下次不再重复登录）")
+                login_btn.clicked.connect(lambda _=False, r=role: self._account_login(r))
+                row.addWidget(login_btn)
+                dir_btn = QPushButton("打开目录")
+                dir_btn.setToolTip("在资源管理器中打开该角色的登录配置目录（备份/查看）")
+                dir_btn.clicked.connect(lambda _=False, r=role: self._account_open_dir(r))
+                row.addWidget(dir_btn)
+                clear_btn = QPushButton("清空登录态")
+                clear_btn.setToolTip("删除该角色的登录信息，下次打开需重新登录（用于换账号）")
+                clear_btn.clicked.connect(lambda _=False, r=role: self._account_clear(r))
+                row.addWidget(clear_btn)
+                row.addStretch(1)
+                account_layout.addLayout(row)
+                self._account_rows[role] = status_label
+            layout.addWidget(self.account_panel)
 
             prefix_row = QHBoxLayout()
             self.fix_affix_check = QCheckBox("固定前/后两字")
@@ -860,6 +897,62 @@ def main() -> int:
             )
 
         # ---------- 更新 ----------
+        def _toggle_account_panel(self) -> None:
+            self.account_panel.setVisible(not self.account_panel.isVisible())
+            if self.account_panel.isVisible():
+                self._refresh_account_status()
+
+        def _refresh_account_status(self) -> None:
+            for role, status_label in self._account_rows.items():
+                info = core.browser_login_status(role)
+                if info["has_login"]:
+                    status_label.setText(f"已登录（最近 {info['cookies_mtime']}）")
+                    status_label.setStyleSheet("color:#1e8e3e;")
+                else:
+                    status_label.setText("从未登录（点「打开登录页」登录一次）")
+                    status_label.setStyleSheet("color:#9e9e9e;")
+
+        def _on_account_msg(self, message: str) -> None:
+            self._append_log(message)
+            self._refresh_account_status()
+
+        def _account_login(self, role: str) -> None:
+            label = "原剧下载" if role == "download" else "别名申请"
+            self._append_log(f"浏览器账号：正在打开「{label}」登录页，请在打开的窗口中登录…")
+            log_path = core.data_root / "logs" / f"login_{role}.log"
+            threading.Thread(target=self._account_login_worker, args=(role, log_path), daemon=True).start()
+
+        def _account_login_worker(self, role: str, log_path: Path) -> None:
+            label = "原剧下载" if role == "download" else "别名申请"
+            try:
+                code, _ = core.open_browser_login(role, log_path)
+                if code == 0:
+                    self.account_signal.emit(f"浏览器账号：「{label}」登录完成，登录态已保存")
+                else:
+                    self.account_signal.emit(f"浏览器账号：「{label}」登录窗口已关闭（退出码 {code}）")
+            except Exception as error:  # noqa: BLE001
+                self.account_signal.emit(f"浏览器账号：「{label}」打开失败：{error}")
+
+        def _account_open_dir(self, role: str) -> None:
+            profile = core.browser_profile_dir(role)
+            profile.mkdir(parents=True, exist_ok=True)
+            try:
+                os.startfile(str(profile))
+            except OSError as error:
+                self._append_log(f"浏览器账号：打开目录失败：{error}")
+
+        def _account_clear(self, role: str) -> None:
+            label = "原剧下载" if role == "download" else "别名申请"
+            answer = QMessageBox.question(
+                self, "清空登录态",
+                f"确定清空「{label}」的登录态吗？\n清空后下次打开需重新登录。",
+            )
+            if answer != QMessageBox.Yes:
+                return
+            core.clear_browser_login(role)
+            self._append_log(f"浏览器账号：「{label}」登录态已清空")
+            self._refresh_account_status()
+
         def _on_progress_emit(self, book_id: str, status: str, detail: str) -> None:
             # 后台线程调用：只发信号，不做任何 UI 操作（线程安全）
             self.progress_signal.emit(book_id, status, detail)

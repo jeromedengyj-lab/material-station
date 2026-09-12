@@ -1203,3 +1203,63 @@ def test_post_type_options_config_file_driven() -> None:
     mtext = main.read_text(encoding="utf-8")
     assert "self.post_type_combo.addItems(core.post_type_options())" in mtext
     assert '"解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑"' not in mtext
+
+
+def test_browser_account_management() -> None:
+    """浏览器账号设置区：profile 命名与 mjs 一致、登录状态可查、可清空；
+    UI 提供展开面板（不影响现有功能），后台日志走 Signal 投递主线程。"""
+    import json
+    import os
+    import tempfile
+    import time as _time
+    from pathlib import Path
+    from station_core import (
+        browser_profile_dir, browser_login_status, clear_browser_login, _safe_profile_name,
+    )
+
+    tmp = Path(tempfile.mkdtemp(prefix="_acct_test_"))
+    _old_local = os.environ.get("LOCALAPPDATA")
+    os.environ["LOCALAPPDATA"] = str(tmp)  # 隔离测试：profile 目录指向临时目录
+    try:
+        # 1) profile 命名与 mjs safe() 一致
+        name = _safe_profile_name("DESKTOP-GRCI5BS")
+        assert name == "DESKTOP-GRCI5BS"
+        assert _safe_profile_name('a:b<c>d"e/f\\g|h?i*j') == "a_b_c_d_e_f_g_h_i_j"
+        # 2) 目录计算与角色区分
+        d = browser_profile_dir(tmp, "download")
+        a = browser_profile_dir(tmp, "alias")
+        assert "素材准备站" in str(d) and "browser_profiles" in str(d)
+        assert str(a).endswith("-别名") and not str(d).endswith("-别名")
+        # 3) 登录状态：无 Cookies -> 未登录
+        info = browser_login_status(tmp, "download")
+        assert info["has_login"] is False
+        # 4) 写入 Cookies 后 -> 已登录（Windows Chrome 路径 Default/Network/Cookies）
+        cookies = d / "Default" / "Network" / "Cookies"
+        cookies.parent.mkdir(parents=True, exist_ok=True)
+        cookies.write_bytes(b"x")
+        info = browser_login_status(tmp, "download")
+        assert info["has_login"] is True and info["cookies_mtime"]
+        # 5) 清空登录态
+        clear_browser_login(tmp, "download")
+        assert browser_login_status(tmp, "download")["has_login"] is False
+
+        # 6) UI 展开面板 + 信号投递
+        main = Path(__file__).resolve().parent.parent / "station_main.py"
+        mtext = main.read_text(encoding="utf-8")
+        assert "浏览器账号" in mtext
+        assert "account_signal = Signal(str)" in mtext
+        assert "def _toggle_account_panel" in mtext
+        assert "def _account_login_worker" in mtext
+        assert "core.open_browser_login(role, log_path)" in mtext
+        assert "threading.Thread(target=self._account_login_worker" in mtext
+        # 7) mjs 登录提示文案已修正（不再误导去普通 Chrome）
+        mjs = (Path(__file__).resolve().parent.parent / "platform_adapter" / "task-platform-download.mjs").read_text(encoding="utf-8")
+        assert "请在打开的窗口中登录" in mjs
+        assert "请在普通 Chrome 中登录" not in mjs
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+        if _old_local is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = _old_local
