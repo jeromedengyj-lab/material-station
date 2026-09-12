@@ -1213,35 +1213,36 @@ def test_browser_account_management() -> None:
     import tempfile
     import time as _time
     from pathlib import Path
-    from station_core import (
-        browser_profile_dir, browser_login_status, clear_browser_login, _safe_profile_name,
-    )
+    from station_core import StationCore
 
     tmp = Path(tempfile.mkdtemp(prefix="_acct_test_"))
     _old_local = os.environ.get("LOCALAPPDATA")
     os.environ["LOCALAPPDATA"] = str(tmp)  # 隔离测试：profile 目录指向临时目录
     try:
+        station = StationCore(tmp, data_root=tmp)  # 实例方法（UI 按 core.xxx 调用）
         # 1) profile 命名与 mjs safe() 一致
-        name = _safe_profile_name("DESKTOP-GRCI5BS")
+        name = station._safe_profile_name("DESKTOP-GRCI5BS")
         assert name == "DESKTOP-GRCI5BS"
-        assert _safe_profile_name('a:b<c>d"e/f\\g|h?i*j') == "a_b_c_d_e_f_g_h_i_j"
+        assert station._safe_profile_name('a:b<c>d"e/f\\g|h?i*j') == "a_b_c_d_e_f_g_h_i_j"
         # 2) 目录计算与角色区分
-        d = browser_profile_dir(tmp, "download")
-        a = browser_profile_dir(tmp, "alias")
+        d = station.browser_profile_dir("download")
+        a = station.browser_profile_dir("alias")
         assert "素材准备站" in str(d) and "browser_profiles" in str(d)
         assert str(a).endswith("-别名") and not str(d).endswith("-别名")
         # 3) 登录状态：无 Cookies -> 未登录
-        info = browser_login_status(tmp, "download")
+        info = station.browser_login_status("download")
         assert info["has_login"] is False
         # 4) 写入 Cookies 后 -> 已登录（Windows Chrome 路径 Default/Network/Cookies）
         cookies = d / "Default" / "Network" / "Cookies"
         cookies.parent.mkdir(parents=True, exist_ok=True)
         cookies.write_bytes(b"x")
-        info = browser_login_status(tmp, "download")
+        info = station.browser_login_status("download")
         assert info["has_login"] is True and info["cookies_mtime"]
         # 5) 清空登录态
-        clear_browser_login(tmp, "download")
-        assert browser_login_status(tmp, "download")["has_login"] is False
+        station.clear_browser_login("download")
+        assert station.browser_login_status("download")["has_login"] is False
+        # 5b) open_browser_login 存在（UI 依赖，含 mjs --login-only 命令构造）
+        assert hasattr(station, "open_browser_login")
 
         # 6) UI 展开面板 + 信号投递
         main = Path(__file__).resolve().parent.parent / "station_main.py"

@@ -134,56 +134,6 @@ def terminate_active_procs(grace: float = 3.0) -> int:
     return killed
 
 
-# ---------- 浏览器账号（登录态管理，profile 持久化在 %LOCALAPPDATA%\素材准备站\browser_profiles） ----------
-def browser_profile_dir(tool_root: str | Path, role: str) -> Path:
-    """角色对应持久登录 profile 目录（与 task-platform-download.mjs 命名一致）。
-
-    role: "download"=原剧下载 / "alias"=别名申请（两个独立登录态，互不干扰）。
-    """
-    base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")) / "素材准备站" / "browser_profiles"
-    host = _safe_profile_name(socket.gethostname())
-    name = f"任务台Chrome-{host}-别名" if role == "alias" else f"任务台Chrome-{host}"
-    return base / name
-
-
-def _safe_profile_name(value: str) -> str:
-    # 与 mjs 的 safe() 一致：非法字符替换为 _，去尾部 . 与空格，截 120
-    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value))
-    text = re.sub(r"[. ]+$", "", text)
-    return text[:120] or "未命名"
-
-
-def browser_login_status(tool_root: str | Path, role: str) -> dict:
-    """角色登录状态：Cookies 最后写入时间（Windows Chrome 位于 Default 目录下 Network/Cookies）。"""
-    profile = browser_profile_dir(tool_root, role)
-    cookies = None
-    for candidate in (profile / "Default" / "Network" / "Cookies", profile / "Default" / "Cookies"):
-        if candidate.is_file():
-            cookies = candidate
-            break
-    return {
-        "role": role,
-        "profile": str(profile),
-        "has_login": cookies is not None,
-        "cookies_mtime": time.strftime("%m-%d %H:%M", time.localtime(cookies.stat().st_mtime)) if cookies else "",
-    }
-
-
-def clear_browser_login(tool_root: str | Path, role: str) -> None:
-    """清空角色登录态（删除 Cookies/Login Data），下次打开需重新登录。"""
-    profile = browser_profile_dir(tool_root, role)
-    if not profile.is_dir():
-        return
-    for root, _dirs, files in os.walk(profile):
-        for f in files:
-            low = f.lower()
-            if low == "cookies" or low.startswith("cookies-") or low.startswith("login data"):
-                try:
-                    (Path(root) / f).unlink()
-                except OSError:
-                    pass
-
-
 def platform_count(tool_root: str | Path) -> int:
 
     """读取 data/platforms.json 的平台数量（与 mjs loadPlatforms 同源，剥注释）。
@@ -264,6 +214,70 @@ class StationTask:
 
 class StationCore:
     """调度核心：串行执行 BookID 任务队列，状态持久化在数据根目录。"""
+
+    # ---------- 浏览器账号（登录态管理，profile 持久化在 %LOCALAPPDATA%\素材准备站\browser_profiles） ----------
+    @staticmethod
+    def _safe_profile_name(value: str) -> str:
+        # 与 mjs 的 safe() 一致：非法字符替换为 _，去尾部 . 与空格，截 120
+        text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value))
+        text = re.sub(r"[. ]+$", "", text)
+        return text[:120] or "未命名"
+
+    def browser_profile_dir(self, role: str) -> Path:
+        """角色对应持久登录 profile 目录（与 task-platform-download.mjs 命名一致）。
+
+        role: "download"=原剧下载 / "alias"=别名申请（两个独立登录态，互不干扰）。
+        """
+        base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")) / "素材准备站" / "browser_profiles"
+        host = self._safe_profile_name(socket.gethostname())
+        name = f"任务台Chrome-{host}-别名" if role == "alias" else f"任务台Chrome-{host}"
+        return base / name
+
+    def browser_login_status(self, role: str) -> dict:
+        """角色登录状态：Cookies 最后写入时间（Windows Chrome 位于 Default 目录下 Network/Cookies）。"""
+        profile = self.browser_profile_dir(role)
+        cookies = None
+        for candidate in (profile / "Default" / "Network" / "Cookies", profile / "Default" / "Cookies"):
+            if candidate.is_file():
+                cookies = candidate
+                break
+        return {
+            "role": role,
+            "profile": str(profile),
+            "has_login": cookies is not None,
+            "cookies_mtime": time.strftime("%m-%d %H:%M", time.localtime(cookies.stat().st_mtime)) if cookies else "",
+        }
+
+    def clear_browser_login(self, role: str) -> None:
+        """清空角色登录态（删除 Cookies/Login Data），下次打开需重新登录。"""
+        profile = self.browser_profile_dir(role)
+        if not profile.is_dir():
+            return
+        for root, _dirs, files in os.walk(profile):
+            for f in files:
+                low = f.lower()
+                if low == "cookies" or low.startswith("cookies-") or low.startswith("login data"):
+                    try:
+                        (Path(root) / f).unlink()
+                    except OSError:
+                        pass
+
+    def open_browser_login(self, role: str, log_path: str | Path) -> tuple[int, str]:
+        """以 --login-only 打开角色浏览器登录页（登录态自动存回持久 profile）。
+
+        返回 (退出码, 输出)；退出码 0 = 登录完成/登录环境已就绪。
+        """
+        adapter = self._adapter("task-platform-download.mjs")
+        cmd = [
+            self.node_command, "--experimental-websocket",
+            str(adapter), "--browser-role", role, "--login-only",
+        ]
+        env = {
+            **os.environ,
+            "MANJU_TOOL_ROOT": str(self.tool_root),
+            "MANJU_SHARED_ROOT": str(self.data_root),
+        }
+        return self._run_process(cmd, env, Path(log_path))
 
     def __init__(
         self,
