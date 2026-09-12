@@ -490,11 +490,9 @@ def main() -> int:
             post_row.addWidget(QLabel("发文类型："))
             self.post_type_combo = QComboBox()
             self.post_type_combo.setEditable(True)
-            # 任务台「请选择计划发文的素材类型」全部选项，直接点选；仍可编辑（可填新类型）
-            self.post_type_combo.addItems([
-                "解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑",
-                "AIGC", "营销号", "沙雕漫", "AI数字人", "滚屏素材",
-            ])
+            # 任务台「请选择计划发文的素材类型」选项：优先读 data/post_type.json 的 options
+            # （官方新增/改名类型时，手动编辑该文件 options 列表即可，不用改代码），缺失回退内置默认
+            self.post_type_combo.addItems(core.post_type_options())
             self.post_type_combo.setCurrentText(core.post_type or "解说混剪")
             self.post_type_combo.setToolTip(
                 "平台弹窗「请选择计划发文的素材类型」选的值；\n"

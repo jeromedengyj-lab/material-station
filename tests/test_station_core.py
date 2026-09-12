@@ -1068,16 +1068,20 @@ def test_post_type_configurable_and_persisted() -> None:
     assert "${POST_TYPE}" in text
 
 def test_post_type_combo_presets_all_platform_options() -> None:
-    """发文类型下拉预置任务台全部选项（解说混剪/真人出镜/图文/解压TTS/meme剪辑/
+    """发文类型下拉由 core.post_type_options() 驱动（配置文件优先、内置默认兜底），
+    覆盖任务台全部选项（解说混剪/真人出镜/图文/解压TTS/meme剪辑/
     AIGC/营销号/沙雕漫/AI数字人/滚屏素材），保持可编辑，默认解说混剪。"""
     from pathlib import Path
     main = Path(__file__).resolve().parent.parent / "station_main.py"
     text = main.read_text(encoding="utf-8")
-    seg = text.split("self.post_type_combo.addItems([")[1].split("])")[0]
+    assert "self.post_type_combo.addItems(core.post_type_options())" in text
+    assert "self.post_type_combo.setEditable(True)" in text
+    # 内置默认列表必须覆盖任务台现有全部选项（配置缺失时兜底）
+    core_text = (Path(__file__).resolve().parent.parent / "station_core.py").read_text(encoding="utf-8")
+    seg = core_text.split("DEFAULT_POST_TYPES = [")[1].split("]")[0]
     for item in ["解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑",
                  "AIGC", "营销号", "沙雕漫", "AI数字人", "滚屏素材"]:
-        assert item in seg, f"下拉缺少选项: {item}"
-    assert "self.post_type_combo.setEditable(True)" in text
+        assert item in seg, f"默认列表缺少选项: {item}"
 
 def test_submit_success_via_ledger_fallback() -> None:
     """提交后成功弹窗因页面导航没被轮询识别时，先查申词记录兜底：
@@ -1154,3 +1158,48 @@ def test_license_inherited_across_upgrade_via_localappdata() -> None:
     assert "for candidate in (license_file, legacy_file):" in text
     # 不再把激活信息写进软件目录 data
     assert '(data_dir / "licensed_mode.flag").write_text' not in text
+
+
+def test_post_type_options_config_file_driven() -> None:
+    """发文类型下拉选项必须像 platforms.json 一样配置文件驱动：
+    data/post_type.json 的 options 优先（官方改类型时手动改文件即可），
+    set_post_type 写回时不得覆盖用户维护的 options。"""
+    import json
+    from pathlib import Path
+    from station_core import StationCore
+
+    core = StationCore.__new__(StationCore)
+    tmp = Path(__file__).resolve().parent / "_tmp_post_type"
+    tmp.mkdir(exist_ok=True)
+    core.data_root = tmp
+
+    # 1) 无 options -> 回退内置默认
+    (tmp / "post_type.json").write_text(json.dumps({"post_type": "解说混剪"}), encoding="utf-8")
+    assert core.post_type_options() == core.DEFAULT_POST_TYPES
+
+    # 2) options 存在 -> 文件优先（模拟官方新增类型后手动维护）
+    (tmp / "post_type.json").write_text(json.dumps(
+        {"post_type": "新类型", "options": ["新类型", "解说混剪", "官方以后新增"]}
+    ), encoding="utf-8")
+    assert core.post_type_options() == ["新类型", "解说混剪", "官方以后新增"]
+    assert core._load_post_type() == "新类型"
+
+    # 3) set_post_type 保留 options 不被覆盖
+    core.post_type = ""
+    core.set_post_type("解说混剪")
+    data = json.loads((tmp / "post_type.json").read_text(encoding="utf-8"))
+    assert data["post_type"] == "解说混剪"
+    assert data["options"] == ["新类型", "解说混剪", "官方以后新增"]
+
+    # 4) options 空/非法 -> 回退默认
+    (tmp / "post_type.json").write_text(json.dumps({"post_type": "x", "options": []}), encoding="utf-8")
+    assert core.post_type_options() == core.DEFAULT_POST_TYPES
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+    # 5) station_main 下拉由 core.post_type_options() 驱动（不再硬编码列表）
+    main = Path(__file__).resolve().parent.parent / "station_main.py"
+    mtext = main.read_text(encoding="utf-8")
+    assert "self.post_type_combo.addItems(core.post_type_options())" in mtext
+    assert '"解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑"' not in mtext

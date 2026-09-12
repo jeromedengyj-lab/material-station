@@ -819,6 +819,12 @@ class StationCore:
         self.content_type = type_key
         self._save_state()
 
+    # 任务台「请选择计划发文的素材类型」默认选项（官方若新增/改名，改 data/post_type.json 的 options 即可，无需改代码）
+    DEFAULT_POST_TYPES = [
+        "解说混剪", "真人出镜", "图文", "解压TTS", "meme剪辑",
+        "AIGC", "营销号", "沙雕漫", "AI数字人", "滚屏素材",
+    ]
+
     def _load_post_type(self) -> str:
         """读取发文类型配置（data/post_type.json），缺失/非法回退「解说混剪」。"""
         try:
@@ -828,13 +834,33 @@ class StationCore:
         except Exception:  # noqa: BLE001
             return "解说混剪"
 
+    def post_type_options(self) -> list[str]:
+        """发文类型下拉选项：优先读 data/post_type.json 的 options（官方改选项时手动维护），
+        缺失/非法回退内置默认列表。"""
+        try:
+            data = json.loads((self.data_root / "post_type.json").read_text(encoding="utf-8"))
+            options = [str(x).strip() for x in (data or {}).get("options") or []]
+            options = [x for x in options if x]
+        except Exception:  # noqa: BLE001
+            options = []
+        return options or list(self.DEFAULT_POST_TYPES)
+
     def set_post_type(self, value: str) -> None:
         """设置发文类型并持久化到 data/post_type.json（下次打开保持）。"""
         value = str(value or "").strip() or "解说混剪"
         self.post_type = value
+        # 写回时保留 options（用户手动维护的选项列表不能被覆盖）
+        try:
+            old_data = json.loads((self.data_root / "post_type.json").read_text(encoding="utf-8"))
+            options = old_data.get("options") if isinstance(old_data, dict) else None
+        except Exception:  # noqa: BLE001
+            options = None
+        payload = {"post_type": value}
+        if options:
+            payload["options"] = options
         try:
             (self.data_root / "post_type.json").write_text(
-                json.dumps({"post_type": value}, ensure_ascii=False), encoding="utf-8"
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
         except Exception:  # noqa: BLE001
             pass
